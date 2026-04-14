@@ -1,0 +1,24 @@
+[package]
+name = "assist-rs"
+version = "1.2.0"
+edition = "2024"
+rust-version = "1.85.0"
+description = "Rust FFI bindings and safe wrappers for ASSIST + REBOUND N-body integration"
+license = "GPL-3.0"
+links = "assist"
+
+[package.metadata.vendored]
+assist = "1.2.0"
+rebound = "4.6.0"
+
+[build-dependencies]
+cc = "1"
+
+[dependencies]
+libc = "0.2"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
