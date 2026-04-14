@@ -6,11 +6,25 @@
 //!
 //! - [`ffi`]: Raw `extern "C"` bindings to REBOUND and ASSIST functions.
 //! - [`Simulation`], [`Ephemeris`], [`AssistSim`]: Safe RAII wrappers.
+//! - Three high-level functions matching the THOR propagator interface:
+//!   [`assist_propagate`], [`assist_get_state`], [`assist_generate_ephemeris`].
 
 pub mod ffi;
 mod wrappers;
 
 pub use wrappers::{AssistSim, Ephemeris, Simulation};
+
+mod propagate;
+mod state;
+pub mod ephemeris;
+mod observatory;
+pub mod coordinates;
+
+pub use propagate::{assist_propagate, PropagatedState};
+pub use state::{assist_get_state, BodyState, Target};
+pub use ephemeris::{assist_generate_ephemeris, EphemerisResult, Observer};
+pub use observatory::ObservatoryTable;
+pub use coordinates::{equatorial_to_ecliptic, ecliptic_to_equatorial};
 
 /// Error type for assist-rs operations.
 #[derive(Debug, thiserror::Error)]
