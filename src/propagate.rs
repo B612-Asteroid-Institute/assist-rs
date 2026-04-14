@@ -98,46 +98,19 @@ pub fn assist_propagate(
         }
     }
 
-    // Add variational particles if STM requested
+    // Add variational particles if STM requested.
+    // With 1 test particle, each call adds 1 variational particle at indices 1..7.
     let var_start_idx = if compute_stm {
-        // Add 6 first-order variational equation sets, one per initial state dimension.
-        // Each adds one variational particle (since we have 1 test particle).
         let idx = asim.sim_mut().add_variation_1st_order(0);
-        // Initialize: each variational particle gets a unit perturbation
-        // in one dimension. After integration, particle[idx+d] gives
-        // the d-th column of the STM.
-        let n = asim.sim().n_particles();
-        for d in 0..6 {
-            if d > 0 {
-                asim.sim_mut().add_variation_1st_order(0);
-            }
-            // Set the initial perturbation: the variational particle
-            // corresponding to dimension `d` gets 1.0 in that component.
-            let vi = (idx as usize) + d;
-            if vi < n {
-                // Variational particles were just added, but we need to
-                // set their initial conditions via the particle array.
-                // REBOUND initializes variational particles to zero; we
-                // need to set the unit perturbation.
-            }
+        for _ in 1..6 {
+            asim.sim_mut().add_variation_1st_order(0);
         }
-        // Actually, REBOUND's add_variation_1st_order adds a set of
-        // variational particles equal to N_real. For 1 test particle,
-        // each call adds 1 variational particle. We need 6 calls total.
-        // The first call was already made above; we made 5 more in the loop.
-        // Now set initial conditions.
-        //
-        // REBOUND variational particles start at index N_real (after the test particle).
-        // For 1 test particle, N_real = 1. After adding 6 variation sets,
-        // we have particles at indices 1..6, each representing ∂x/∂x₀_d.
-        //
-        // We need to initialize each variational particle with a unit
-        // perturbation in one phase-space dimension.
-        let particles = asim.sim().particles();
-        let n_real = 1usize; // our one test particle
-        for d in 0..6 {
-            let vi = n_real + d;
-            if vi < particles.len() {
+
+        // Initialize each variational particle with a unit perturbation in one dimension.
+        // After integration, particle[1+d] gives column d of the STM.
+        unsafe {
+            let ptr = ffi::assist_rs_sim_get_particles(asim.sim().ptr);
+            for d in 0..6 {
                 let mut p = ffi::reb_particle::default();
                 match d {
                     0 => p.x = 1.0,
@@ -148,11 +121,7 @@ pub fn assist_propagate(
                     5 => p.vz = 1.0,
                     _ => unreachable!(),
                 }
-                // Write directly to the particle array
-                unsafe {
-                    let ptr = ffi::assist_rs_sim_get_particles(asim.sim().ptr);
-                    *ptr.add(vi) = p;
-                }
+                *ptr.add(1 + d) = p;
             }
         }
         idx

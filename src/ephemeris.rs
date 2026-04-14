@@ -1,15 +1,14 @@
 //! `assist_generate_ephemeris` — Propagate orbit to observer epochs with
 //! light-time correction and topocentric spherical output.
 
-use crate::Result;
-use crate::coordinates::{cartesian_to_spherical, ecliptic_to_equatorial};
+use crate::coordinates::{cartesian_to_spherical, ecliptic_to_equatorial, equatorial_to_ecliptic};
 use crate::ffi;
 use crate::observatory::ObservatoryTable;
 use crate::orbit::Orbit;
 use crate::origin::Origin;
-use crate::propagate::assist_propagate;
 use crate::state::resolve_origin_state;
-use crate::wrappers::Ephemeris;
+use crate::wrappers::{AssistSim, Ephemeris, Simulation};
+use crate::{Error, Result};
 
 /// Ephemeris result for a single observer epoch.
 #[derive(Debug, Clone)]
@@ -68,11 +67,13 @@ pub fn assist_generate_ephemeris(
     }
 
     let c = ephem.c_au_per_day();
-
     let mut results = Vec::with_capacity(observers.len());
 
     for obs in observers {
-        let result = compute_single_ephemeris(ephem, orbit, obs, c, obs_table)?;
+        // One simulation per observer — reused across the initial propagation
+        // and every light-time iteration.
+        let mut sim = EphemerisSim::new(ephem, orbit)?;
+        let result = compute_single_ephemeris(ephem, &mut sim, obs, c, obs_table)?;
         results.push(result);
     }
 
@@ -82,22 +83,18 @@ pub fn assist_generate_ephemeris(
 /// Compute ephemeris for a single observer with light-time iteration.
 fn compute_single_ephemeris(
     ephem: &Ephemeris,
-    orbit: &Orbit,
+    sim: &mut EphemerisSim,
     obs: &Observer,
     c: f64,
     obs_table: Option<&ObservatoryTable>,
 ) -> Result<EphemerisResult> {
     let t_obs = obs.epoch;
 
-    // Resolve observer state
     let obs_state = resolve_origin_state(ephem, &obs.origin, t_obs, obs_table)?;
 
-    // Step 1: Propagate to observation epoch for initial distance estimate
-    let prop_orbit = Orbit::new(orbit.state, orbit.epoch);
-    let states = assist_propagate(ephem, &prop_orbit, &[t_obs], false)?;
-    let helio_ecl_obs = states[0].state;
+    // Step 1: Propagate to observation epoch for initial distance estimate.
+    let helio_ecl_obs = sim.integrate_to(t_obs)?;
 
-    // Initial light-time estimate
     let dx = [
         helio_ecl_obs[0] - obs_state[0],
         helio_ecl_obs[1] - obs_state[1],
@@ -106,19 +103,18 @@ fn compute_single_ephemeris(
     let dist = (dx[0] * dx[0] + dx[1] * dx[1] + dx[2] * dx[2]).sqrt();
     let mut tau = dist / c;
 
-    // Step 2: Light-time iteration
+    // Step 2: Light-time iteration.
     const MAX_ITER: usize = 10;
     // ~10 ns: above the ~4e-14 day integrator re-integration noise floor so
     // the loop can't limit-cycle between two adjacent f64 values. Position
     // error from this tolerance is < 1 m even for the closest NEOs.
     const TOL: f64 = 1e-13;
     let mut aberrated_state = helio_ecl_obs;
+    let mut converged = false;
 
-    // Use the full orbit (with non-grav) for light-time iteration
     for _ in 0..MAX_ITER {
         let t_emit = t_obs - tau;
-        let emit_states = assist_propagate(ephem, orbit, &[t_emit], false)?;
-        aberrated_state = emit_states[0].state;
+        aberrated_state = sim.integrate_to(t_emit)?;
 
         let dx_new = [
             aberrated_state[0] - obs_state[0],
@@ -131,9 +127,14 @@ fn compute_single_ephemeris(
 
         if (tau_new - tau).abs() < TOL {
             tau = tau_new;
+            converged = true;
             break;
         }
         tau = tau_new;
+    }
+
+    if !converged {
+        return Err(Error::LightTimeConvergence(MAX_ITER));
     }
 
     // Step 3: Topocentric vector in barycentric equatorial (inertial frame).
@@ -190,6 +191,123 @@ fn compute_single_ephemeris(
         light_time: tau,
         epoch: t_obs,
     })
+}
+
+/// Reusable simulation for ephemeris generation.
+///
+/// Owns an `AssistSim` set up for a single orbit and supports repeated
+/// integration to different target epochs (forward or backward in time)
+/// without re-creating the simulation. This amortizes the setup cost over
+/// all light-time iterations for one observer.
+struct EphemerisSim<'a> {
+    asim: AssistSim,
+    ephem: &'a Ephemeris,
+    jd_ref: f64,
+    // Kept alive for ASSIST's particle_params pointer; only set when non-grav is active.
+    _particle_params: Option<Vec<f64>>,
+}
+
+impl<'a> EphemerisSim<'a> {
+    fn new(ephem: &'a Ephemeris, orbit: &Orbit) -> Result<Self> {
+        let jd_ref = ephem.jd_ref();
+        let t0 = mjd_to_assist_time(orbit.epoch, jd_ref);
+
+        // Heliocentric ecliptic → barycentric equatorial ICRF
+        let eq_state = ecliptic_to_equatorial(&orbit.state);
+        let sun = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t0)?;
+        let bary_state = [
+            eq_state[0] + sun.x,
+            eq_state[1] + sun.y,
+            eq_state[2] + sun.z,
+            eq_state[3] + sun.vx,
+            eq_state[4] + sun.vy,
+            eq_state[5] + sun.vz,
+        ];
+
+        let mut sim = Simulation::new()?;
+        sim.set_t(t0);
+        let mut asim = AssistSim::new(sim, ephem)?;
+
+        let non_grav = orbit.non_grav.as_ref();
+        let mut forces = ffi::ASSIST_FORCES_DEFAULT;
+        if non_grav.is_some() {
+            forces |= ffi::ASSIST_FORCE_NON_GRAVITATIONAL;
+        }
+        asim.set_forces(forces);
+
+        asim.sim_mut().add_test_particle(
+            bary_state[0],
+            bary_state[1],
+            bary_state[2],
+            bary_state[3],
+            bary_state[4],
+            bary_state[5],
+        );
+
+        if let Some(ng) = non_grav {
+            if let Some(v) = ng.alpha {
+                asim.set_alpha(v);
+            }
+            if let Some(v) = ng.nk {
+                asim.set_nk(v);
+            }
+            if let Some(v) = ng.nm {
+                asim.set_nm(v);
+            }
+            if let Some(v) = ng.nn {
+                asim.set_nn(v);
+            }
+            if let Some(v) = ng.r0 {
+                asim.set_r0(v);
+            }
+        }
+
+        let particle_params = if let Some(ng) = non_grav {
+            let n_total = asim.sim().n_particles();
+            let mut params = vec![0.0f64; 3 * n_total];
+            params[0] = ng.a1;
+            params[1] = ng.a2;
+            params[2] = ng.a3;
+            unsafe {
+                asim.set_particle_params(params.as_mut_ptr());
+            }
+            Some(params)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            asim,
+            ephem,
+            jd_ref,
+            _particle_params: particle_params,
+        })
+    }
+
+    /// Integrate to the given epoch (MJD TDB) and return the heliocentric
+    /// ecliptic J2000 state of the test particle.
+    fn integrate_to(&mut self, mjd_tdb: f64) -> Result<[f64; 6]> {
+        let t_target = mjd_to_assist_time(mjd_tdb, self.jd_ref);
+        self.asim.integrate(t_target)?;
+
+        let particles = self.asim.sim().particles();
+        if particles.is_empty() {
+            return Err(Error::Other("No particles after integration".into()));
+        }
+        let p = &particles[0];
+        let bary_eq = [p.x, p.y, p.z, p.vx, p.vy, p.vz];
+
+        let sun_t = self.ephem.get_body_state(ffi::ASSIST_BODY_SUN, t_target)?;
+        let helio_eq = [
+            bary_eq[0] - sun_t.x,
+            bary_eq[1] - sun_t.y,
+            bary_eq[2] - sun_t.z,
+            bary_eq[3] - sun_t.vx,
+            bary_eq[4] - sun_t.vy,
+            bary_eq[5] - sun_t.vz,
+        ];
+        Ok(equatorial_to_ecliptic(&helio_eq))
+    }
 }
 
 fn mjd_to_assist_time(mjd_tdb: f64, jd_ref: f64) -> f64 {
