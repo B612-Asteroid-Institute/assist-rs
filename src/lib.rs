@@ -15,6 +15,8 @@ mod wrappers;
 pub use wrappers::{AssistSim, Ephemeris, Simulation};
 
 pub mod coordinates;
+#[cfg(feature = "data")]
+pub mod data;
 pub mod ephemeris;
 mod observatory;
 mod orbit;
