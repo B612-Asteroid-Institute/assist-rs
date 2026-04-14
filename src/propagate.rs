@@ -69,19 +69,33 @@ pub fn assist_propagate(
 
     // Add test particle (index 0)
     asim.sim_mut().add_test_particle(
-        bary_state[0], bary_state[1], bary_state[2],
-        bary_state[3], bary_state[4], bary_state[5],
+        bary_state[0],
+        bary_state[1],
+        bary_state[2],
+        bary_state[3],
+        bary_state[4],
+        bary_state[5],
     );
 
     // Set non-gravitational model parameters if provided.
     // particle_params is allocated after variational particles are added
     // (since the array must cover N_real + N_var particles).
     if let Some(ng) = non_grav {
-        if let Some(v) = ng.alpha { asim.set_alpha(v); }
-        if let Some(v) = ng.nk { asim.set_nk(v); }
-        if let Some(v) = ng.nm { asim.set_nm(v); }
-        if let Some(v) = ng.nn { asim.set_nn(v); }
-        if let Some(v) = ng.r0 { asim.set_r0(v); }
+        if let Some(v) = ng.alpha {
+            asim.set_alpha(v);
+        }
+        if let Some(v) = ng.nk {
+            asim.set_nk(v);
+        }
+        if let Some(v) = ng.nm {
+            asim.set_nm(v);
+        }
+        if let Some(v) = ng.nn {
+            asim.set_nn(v);
+        }
+        if let Some(v) = ng.r0 {
+            asim.set_r0(v);
+        }
     }
 
     // Add variational particles if STM requested
@@ -198,18 +212,14 @@ pub fn assist_propagate(
         let stm = if compute_stm && var_start_idx >= 0 {
             let mut stm = [[0.0f64; 6]; 6];
             let n_real = 1usize;
-            for d in 0..6 {
-                let vi = n_real + d;
-                if vi < particles.len() {
-                    let vp = &particles[vi];
-                    // Column d of the STM (in barycentric equatorial)
-                    stm[0][d] = vp.x;
-                    stm[1][d] = vp.y;
-                    stm[2][d] = vp.z;
-                    stm[3][d] = vp.vx;
-                    stm[4][d] = vp.vy;
-                    stm[5][d] = vp.vz;
-                }
+            for (d, vp) in particles[n_real..].iter().enumerate().take(6) {
+                // Column d of the STM (in barycentric equatorial)
+                stm[0][d] = vp.x;
+                stm[1][d] = vp.y;
+                stm[2][d] = vp.z;
+                stm[3][d] = vp.vx;
+                stm[4][d] = vp.vy;
+                stm[5][d] = vp.vz;
             }
             // Rotate STM from equatorial to ecliptic: R × STM_eq × R^T
             Some(rotate_matrix_eq_to_ecl(&stm))

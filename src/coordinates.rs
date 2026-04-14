@@ -26,10 +26,10 @@ pub fn equatorial_to_ecliptic(state: &[f64; 6]) -> [f64; 6] {
     [
         x,
         COS_EPS * y + SIN_EPS * z,
-       -SIN_EPS * y + COS_EPS * z,
+        -SIN_EPS * y + COS_EPS * z,
         vx,
         COS_EPS * vy + SIN_EPS * vz,
-       -SIN_EPS * vy + COS_EPS * vz,
+        -SIN_EPS * vy + COS_EPS * vz,
     ]
 }
 
@@ -64,12 +64,16 @@ fn rotation_matrix_eq_to_ecl() -> [[f64; 6]; 6] {
     let mut r = [[0.0f64; 6]; 6];
     // Upper-left 3×3
     r[0][0] = 1.0;
-    r[1][1] = COS_EPS;  r[1][2] = SIN_EPS;
-    r[2][1] = -SIN_EPS; r[2][2] = COS_EPS;
+    r[1][1] = COS_EPS;
+    r[1][2] = SIN_EPS;
+    r[2][1] = -SIN_EPS;
+    r[2][2] = COS_EPS;
     // Lower-right 3×3
     r[3][3] = 1.0;
-    r[4][4] = COS_EPS;  r[4][5] = SIN_EPS;
-    r[5][4] = -SIN_EPS; r[5][5] = COS_EPS;
+    r[4][4] = COS_EPS;
+    r[4][5] = SIN_EPS;
+    r[5][4] = -SIN_EPS;
+    r[5][5] = COS_EPS;
     r
 }
 

@@ -65,7 +65,12 @@ impl Simulation {
     /// Add a test particle with given position and velocity (mass = 0).
     pub fn add_test_particle(&mut self, x: f64, y: f64, z: f64, vx: f64, vy: f64, vz: f64) {
         let p = ffi::reb_particle {
-            x, y, z, vx, vy, vz,
+            x,
+            y,
+            z,
+            vx,
+            vy,
+            vz,
             m: 0.0,
             ..Default::default()
         };
@@ -126,9 +131,8 @@ impl Ephemeris {
     pub fn from_paths(planets: &Path, asteroids: &Path) -> Result<Self> {
         let planets_cstr = path_to_cstring(planets)?;
         let asteroids_cstr = path_to_cstring(asteroids)?;
-        let ptr = unsafe {
-            ffi::assist_ephem_create(planets_cstr.as_ptr(), asteroids_cstr.as_ptr())
-        };
+        let ptr =
+            unsafe { ffi::assist_ephem_create(planets_cstr.as_ptr(), asteroids_cstr.as_ptr()) };
         if ptr.is_null() {
             return Err(Error::EphemerisError(
                 "assist_ephem_create returned null — check file paths".into(),
@@ -169,9 +173,7 @@ impl Ephemeris {
     /// Get a solar system body's state at time `t` (days from `jd_ref`).
     pub fn get_body_state(&self, body_id: i32, t: f64) -> Result<ffi::reb_particle> {
         let mut error: i32 = 0;
-        let p = unsafe {
-            ffi::assist_get_particle_with_error(self.ptr, body_id, t, &mut error)
-        };
+        let p = unsafe { ffi::assist_get_particle_with_error(self.ptr, body_id, t, &mut error) };
         if error != 0 {
             return Err(Error::EphemerisError(format!(
                 "assist_get_particle failed for body {body_id} at t={t}: error code {error}"
@@ -319,7 +321,10 @@ impl Drop for AssistSim {
 
 fn path_to_cstring(path: &Path) -> Result<CString> {
     let s = path.to_str().ok_or_else(|| {
-        Error::Other(format!("path contains non-UTF8 characters: {}", path.display()))
+        Error::Other(format!(
+            "path contains non-UTF8 characters: {}",
+            path.display()
+        ))
     })?;
     CString::new(s).map_err(|e| Error::Other(format!("path contains null byte: {e}")))
 }

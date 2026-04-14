@@ -1,6 +1,7 @@
 //! `assist_generate_ephemeris` — Propagate orbit to observer epochs with
 //! light-time correction and topocentric spherical output.
 
+use crate::Result;
 use crate::coordinates::{cartesian_to_spherical, ecliptic_to_equatorial};
 use crate::ffi;
 use crate::observatory::ObservatoryTable;
@@ -9,7 +10,6 @@ use crate::origin::Origin;
 use crate::propagate::assist_propagate;
 use crate::state::resolve_origin_state;
 use crate::wrappers::Ephemeris;
-use crate::Result;
 
 /// Ephemeris result for a single observer epoch.
 #[derive(Debug, Clone)]
@@ -72,13 +72,7 @@ pub fn assist_generate_ephemeris(
     let mut results = Vec::with_capacity(observers.len());
 
     for obs in observers {
-        let result = compute_single_ephemeris(
-            ephem,
-            orbit,
-            obs,
-            c,
-            obs_table,
-        )?;
+        let result = compute_single_ephemeris(ephem, orbit, obs, c, obs_table)?;
         results.push(result);
     }
 
@@ -131,7 +125,8 @@ fn compute_single_ephemeris(
             aberrated_state[1] - obs_state[1],
             aberrated_state[2] - obs_state[2],
         ];
-        let dist_new = (dx_new[0] * dx_new[0] + dx_new[1] * dx_new[1] + dx_new[2] * dx_new[2]).sqrt();
+        let dist_new =
+            (dx_new[0] * dx_new[0] + dx_new[1] * dx_new[1] + dx_new[2] * dx_new[2]).sqrt();
         let tau_new = dist_new / c;
 
         if (tau_new - tau).abs() < TOL {

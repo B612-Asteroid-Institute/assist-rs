@@ -1,0 +1,111 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [ "main", "feature/**" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Build & Lint ────────────────────────────────────────────────
+  build-lint:
+    name: Build & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          rustflags: ""
+
+      - name: Build
+        run: cargo build --verbose
+
+      - name: Lint
+        run: |
+          cargo fmt -- --check
+          cargo clippy --all-targets --all-features
+
+  # ── Test ─────────────────────────────────────────────────────────
+  test:
+    name: Test
+    needs: build-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+
+      - name: Unit tests
+        run: cargo test --verbose -- --test-threads=1
+
+      - name: Install ephemeris data packages
+        run: pip install naif-de440 jpl-small-bodies-de441-n16
+
+      - name: Resolve ephemeris paths
+        run: |
+          echo "ASSIST_PLANETS_PATH=$(python3 -c 'import naif_de440; print(naif_de440.de440)')" >> $GITHUB_ENV
+          echo "ASSIST_ASTEROIDS_PATH=$(python3 -c 'import jpl_small_bodies_de441_n16 as sb; print(sb.de441_n16)')" >> $GITHUB_ENV
+
+      - name: Integration tests
+        run: cargo test --release --verbose -- --test-threads=1
+        timeout-minutes: 15
+
+  # ── Benchmark: Criterion with baseline comparison ───────────────
+  benchmark:
+    name: Benchmark
+    needs: build-lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      deployments: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+
+      - name: Install ephemeris data packages
+        run: pip install naif-de440 jpl-small-bodies-de441-n16
+
+      - name: Resolve ephemeris paths
+        run: |
+          echo "ASSIST_PLANETS_PATH=$(python3 -c 'import naif_de440; print(naif_de440.de440)')" >> $GITHUB_ENV
+          echo "ASSIST_ASTEROIDS_PATH=$(python3 -c 'import jpl_small_bodies_de441_n16 as sb; print(sb.de441_n16)')" >> $GITHUB_ENV
+
+      - name: Run benchmarks
+        run: cargo bench --bench propagation -- --output-format bencher 2>&1 | tee benchmark-output.txt
+        env:
+          CARGO_TERM_COLOR: never
+        timeout-minutes: 30
+
+      - name: Compare benchmarks
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: assist-rs Benchmarks
+          tool: cargo
+          output-file-path: benchmark-output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: ${{ github.ref == 'refs/heads/main' }}
+          comment-on-alert: true
+          summary-always: true
+          comment-always: true
+          alert-threshold: "200%"
+          fail-on-alert: false

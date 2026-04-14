@@ -34,11 +34,11 @@ fn load_ephem() -> Option<assist_rs::Ephemeris> {
 // Ceres heliocentric ecliptic J2000 at MJD 60000.0 TDB
 const CERES_STATE: [f64; 6] = [
     -1.938_169_72,
-     2.289_213_79,
-     1.094_048_30,
+    2.289_213_79,
+    1.094_048_30,
     -0.008_744_54,
     -0.005_523_16,
-     0.001_174_22,
+    0.001_174_22,
 ];
 const EPOCH: f64 = 60000.0;
 
@@ -69,15 +69,7 @@ fn bench_propagate_single(c: &mut Criterion) {
             BenchmarkId::new("rust_api", n_epochs),
             &targets,
             |b, targets| {
-                b.iter(|| {
-                    assist_rs::assist_propagate(
-                        &ephem,
-                        &orbit,
-                        targets,
-                        false,
-                    )
-                    .unwrap()
-                });
+                b.iter(|| assist_rs::assist_propagate(&ephem, &orbit, targets, false).unwrap());
             },
         );
     }
@@ -93,16 +85,10 @@ fn bench_propagate_with_stm(c: &mut Criterion) {
 
     c.benchmark_group("propagate_stm")
         .bench_function("without_stm", |b| {
-            b.iter(|| {
-                assist_rs::assist_propagate(&ephem, &orbit, &targets, false)
-                    .unwrap()
-            });
+            b.iter(|| assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap());
         })
         .bench_function("with_stm", |b| {
-            b.iter(|| {
-                assist_rs::assist_propagate(&ephem, &orbit, &targets, true)
-                    .unwrap()
-            });
+            b.iter(|| assist_rs::assist_propagate(&ephem, &orbit, &targets, true).unwrap());
         });
 }
 
@@ -116,16 +102,10 @@ fn bench_propagate_with_nongrav(c: &mut Criterion) {
 
     c.benchmark_group("propagate_nongrav")
         .bench_function("gravity_only", |b| {
-            b.iter(|| {
-                assist_rs::assist_propagate(&ephem, &orbit_grav, &targets, false)
-                    .unwrap()
-            });
+            b.iter(|| assist_rs::assist_propagate(&ephem, &orbit_grav, &targets, false).unwrap());
         })
         .bench_function("with_a2", |b| {
-            b.iter(|| {
-                assist_rs::assist_propagate(&ephem, &orbit_ng, &targets, false)
-                    .unwrap()
-            });
+            b.iter(|| assist_rs::assist_propagate(&ephem, &orbit_ng, &targets, false).unwrap());
         });
 }
 
@@ -200,10 +180,7 @@ fn bench_rust_vs_raw_c(c: &mut Criterion) {
     let mut group = c.benchmark_group("rust_vs_raw_c");
 
     group.bench_function("rust_api", |b| {
-        b.iter(|| {
-            assist_rs::assist_propagate(&ephem, &orbit, &targets, false)
-                .unwrap()
-        });
+        b.iter(|| assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap());
     });
 
     group.bench_function("raw_c_ffi", |b| {
@@ -236,10 +213,7 @@ fn bench_parallel_propagation(c: &mut Criterion) {
         b.iter(|| {
             orbits
                 .iter()
-                .map(|orbit| {
-                    assist_rs::assist_propagate(&ephem, orbit, &targets, false)
-                        .unwrap()
-                })
+                .map(|orbit| assist_rs::assist_propagate(&ephem, orbit, &targets, false).unwrap())
                 .collect::<Vec<_>>()
         });
     });
@@ -249,10 +223,7 @@ fn bench_parallel_propagation(c: &mut Criterion) {
         b.iter(|| {
             orbits
                 .par_iter()
-                .map(|orbit| {
-                    assist_rs::assist_propagate(&ephem, orbit, &targets, false)
-                        .unwrap()
-                })
+                .map(|orbit| assist_rs::assist_propagate(&ephem, orbit, &targets, false).unwrap())
                 .collect::<Vec<_>>()
         });
     });
@@ -272,21 +243,9 @@ fn bench_duration_scaling(c: &mut Criterion) {
 
     for days in [1, 10, 30, 100, 365] {
         let targets = vec![EPOCH + days as f64];
-        group.bench_with_input(
-            BenchmarkId::new("days", days),
-            &targets,
-            |b, targets| {
-                b.iter(|| {
-                    assist_rs::assist_propagate(
-                        &ephem,
-                        &orbit,
-                        targets,
-                        false,
-                    )
-                    .unwrap()
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("days", days), &targets, |b, targets| {
+            b.iter(|| assist_rs::assist_propagate(&ephem, &orbit, targets, false).unwrap());
+        });
     }
 
     group.finish();

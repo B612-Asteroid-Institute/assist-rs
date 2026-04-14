@@ -28,19 +28,26 @@ pub struct reb_particle {
     pub m: c_double,
     pub r: c_double,
     pub last_collision: c_double,
-    pub c: *mut c_void,    // reb_treecell*
+    pub c: *mut c_void, // reb_treecell*
     pub hash: u32,
     pub ap: *mut c_void,
-    pub sim: *mut c_void,  // reb_simulation*
+    pub sim: *mut c_void, // reb_simulation*
 }
 
 impl Default for reb_particle {
     fn default() -> Self {
         Self {
-            x: 0.0, y: 0.0, z: 0.0,
-            vx: 0.0, vy: 0.0, vz: 0.0,
-            ax: 0.0, ay: 0.0, az: 0.0,
-            m: 0.0, r: 0.0,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            vx: 0.0,
+            vy: 0.0,
+            vz: 0.0,
+            ax: 0.0,
+            ay: 0.0,
+            az: 0.0,
+            m: 0.0,
+            r: 0.0,
             last_collision: 0.0,
             c: std::ptr::null_mut(),
             hash: 0,
@@ -165,10 +172,7 @@ unsafe extern "C" {
     ) -> *mut assist_ephem;
     pub fn assist_ephem_free(ephem: *mut assist_ephem);
 
-    pub fn assist_attach(
-        sim: *mut reb_simulation,
-        ephem: *mut assist_ephem,
-    ) -> *mut assist_extras;
+    pub fn assist_attach(sim: *mut reb_simulation, ephem: *mut assist_ephem) -> *mut assist_extras;
     pub fn assist_free(ax: *mut assist_extras);
     pub fn assist_detach(sim: *mut reb_simulation, ax: *mut assist_extras);
 

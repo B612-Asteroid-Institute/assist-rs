@@ -70,20 +70,12 @@ fn load_reference_data() -> Option<ReferenceData> {
 
 /// Propagate a single orbit and compare against reference.
 /// Returns (object_id, max_position_error_au, max_velocity_error).
-fn validate_orbit(
-    ephem: &assist_rs::Ephemeris,
-    entry: &OrbitEntry,
-) -> (String, f64, f64) {
+fn validate_orbit(ephem: &assist_rs::Ephemeris, entry: &OrbitEntry) -> (String, f64, f64) {
     let orbit = assist_rs::Orbit::new(entry.initial_state, entry.epoch_mjd);
     let target_epochs: Vec<f64> = entry.propagated.iter().map(|p| p.epoch).collect();
 
-    let results = assist_rs::assist_propagate(
-        ephem,
-        &orbit,
-        &target_epochs,
-        false,
-    )
-    .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", entry.object_id));
+    let results = assist_rs::assist_propagate(ephem, &orbit, &target_epochs, false)
+        .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", entry.object_id));
 
     assert_eq!(
         results.len(),
@@ -139,8 +131,8 @@ fn test_validation_against_python() {
         reference.metadata.propagation_days, reference.metadata.n_epochs
     );
 
-    let ephem = assist_rs::Ephemeris::from_paths(&planets, &asteroids)
-        .expect("Failed to load ephemeris");
+    let ephem =
+        assist_rs::Ephemeris::from_paths(&planets, &asteroids).expect("Failed to load ephemeris");
 
     // Propagate all orbits in parallel using rayon.
     // Ephemeris is Send+Sync — each thread creates its own Simulation.
@@ -189,24 +181,16 @@ fn test_validation_against_python() {
             n_pass += 1;
         } else {
             n_fail += 1;
-            eprintln!(
-                "FAIL: {name}: pos_err={pos_err:.2e} AU, vel_err={vel_err:.2e} AU/day"
-            );
+            eprintln!("FAIL: {name}: pos_err={pos_err:.2e} AU, vel_err={vel_err:.2e} AU/day");
         }
     }
 
     eprintln!("\n--- Validation Summary ---");
     eprintln!("Orbits tested: {}", results.len());
     eprintln!("Passed: {n_pass}, Failed: {n_fail}");
-    eprintln!(
-        "Worst position error: {worst_pos_err:.2e} AU ({worst_pos_name})"
-    );
-    eprintln!(
-        "Worst velocity error: {worst_vel_err:.2e} AU/day ({worst_vel_name})"
-    );
-    eprintln!(
-        "Tolerances: pos < {pos_tol_au:.0e} AU, vel < {vel_tol_au_day:.0e} AU/day"
-    );
+    eprintln!("Worst position error: {worst_pos_err:.2e} AU ({worst_pos_name})");
+    eprintln!("Worst velocity error: {worst_vel_err:.2e} AU/day ({worst_vel_name})");
+    eprintln!("Tolerances: pos < {pos_tol_au:.0e} AU, vel < {vel_tol_au_day:.0e} AU/day");
 
     assert_eq!(
         n_fail, 0,
@@ -222,14 +206,18 @@ fn test_rayon_parallel_propagation() {
         return;
     };
 
-    let ephem = assist_rs::Ephemeris::from_paths(&planets, &asteroids)
-        .expect("Failed to load ephemeris");
+    let ephem =
+        assist_rs::Ephemeris::from_paths(&planets, &asteroids).expect("Failed to load ephemeris");
 
     // Create 10 copies of a test orbit and propagate in parallel
     let orbit = assist_rs::Orbit::new(
         [
-            -1.938_169_72, 2.289_213_79, 1.094_048_30,
-            -0.008_744_54, -0.005_523_16, 0.001_174_22,
+            -1.938_169_72,
+            2.289_213_79,
+            1.094_048_30,
+            -0.008_744_54,
+            -0.005_523_16,
+            0.001_174_22,
         ],
         60000.0,
     );
@@ -246,11 +234,11 @@ fn test_rayon_parallel_propagation() {
 
     // All results should be identical (same input, same library)
     assert_eq!(results.len(), n_orbits);
-    for i in 1..n_orbits {
-        for j in 0..3 {
+    for (i, orbit_results) in results.iter().enumerate().skip(1) {
+        for (j, epoch_result) in orbit_results.iter().enumerate() {
             for k in 0..6 {
                 assert!(
-                    (results[0][j].state[k] - results[i][j].state[k]).abs() < 1e-15,
+                    (results[0][j].state[k] - epoch_result.state[k]).abs() < 1e-15,
                     "Parallel result mismatch: orbit {i}, epoch {j}, element {k}"
                 );
             }

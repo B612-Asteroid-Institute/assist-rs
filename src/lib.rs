@@ -14,21 +14,21 @@ mod wrappers;
 
 pub use wrappers::{AssistSim, Ephemeris, Simulation};
 
+pub mod coordinates;
+pub mod ephemeris;
+mod observatory;
 mod orbit;
 mod origin;
 mod propagate;
 mod state;
-pub mod ephemeris;
-pub mod coordinates;
-mod observatory;
 
+pub use coordinates::{ecliptic_to_equatorial, equatorial_to_ecliptic};
+pub use ephemeris::{EphemerisResult, Observer, assist_generate_ephemeris};
+pub use observatory::ObservatoryTable;
 pub use orbit::{NonGravParams, Orbit};
 pub use origin::Origin;
-pub use propagate::{assist_propagate, PropagatedState};
-pub use state::{assist_get_state, BodyState};
-pub use ephemeris::{assist_generate_ephemeris, EphemerisResult, Observer};
-pub use observatory::ObservatoryTable;
-pub use coordinates::{equatorial_to_ecliptic, ecliptic_to_equatorial};
+pub use propagate::{PropagatedState, assist_propagate};
+pub use state::{BodyState, assist_get_state};
 
 /// Error type for assist-rs operations.
 #[derive(Debug, thiserror::Error)]

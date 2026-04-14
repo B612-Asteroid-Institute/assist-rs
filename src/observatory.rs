@@ -41,33 +41,38 @@ impl ObservatoryTable {
     /// Expected format: JSON object where keys are 3-char MPC codes and values
     /// are objects with fields: `Longitude`, `cos`, `sin`, `Name`.
     pub fn from_json(path: &Path) -> Result<Self> {
-        let data = std::fs::read_to_string(path)
-            .map_err(|e| Error::Io(std::io::Error::new(e.kind(), format!("{}: {e}", path.display()))))?;
+        let data = std::fs::read_to_string(path).map_err(|e| {
+            Error::Io(std::io::Error::new(
+                e.kind(),
+                format!("{}: {e}", path.display()),
+            ))
+        })?;
         let raw: HashMap<String, serde_json::Value> = serde_json::from_str(&data)
             .map_err(|e| Error::Other(format!("Failed to parse observatory JSON: {e}")))?;
 
         let mut entries = HashMap::with_capacity(raw.len());
         for (code, val) in &raw {
-            let longitude_deg = val.get("Longitude")
+            let longitude_deg = val
+                .get("Longitude")
                 .and_then(|v| v.as_f64())
                 .unwrap_or(f64::NAN);
-            let cos_lat = val.get("cos")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
-            let sin_lat = val.get("sin")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
-            let name = val.get("Name")
+            let cos_lat = val.get("cos").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let sin_lat = val.get("sin").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            let name = val
+                .get("Name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
 
-            entries.insert(code.clone(), ObservatoryEntry {
-                longitude_deg,
-                cos_lat,
-                sin_lat,
-                name,
-            });
+            entries.insert(
+                code.clone(),
+                ObservatoryEntry {
+                    longitude_deg,
+                    cos_lat,
+                    sin_lat,
+                    name,
+                },
+            );
         }
 
         Ok(Self { entries })

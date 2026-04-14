@@ -93,9 +93,9 @@ fn compute_observatory_state(
     t: f64,
     obs_table: &ObservatoryTable,
 ) -> Result<[f64; 6]> {
-    let entry = obs_table.get(code).ok_or_else(|| {
-        Error::InvalidObservatory(format!("Unknown MPC code: {code}"))
-    })?;
+    let entry = obs_table
+        .get(code)
+        .ok_or_else(|| Error::InvalidObservatory(format!("Unknown MPC code: {code}")))?;
 
     // Get Earth barycentric state
     let earth = ephem.get_body_state(ffi::ASSIST_BODY_EARTH, t)?;
@@ -158,10 +158,8 @@ fn compute_gmst(mjd_tdb: f64) -> f64 {
     let d = jd - 2_451_545.0; // days from J2000.0
     let t = d / 36525.0; // Julian centuries
 
-    let gmst_deg = 280.460_618_37
-        + 360.985_647_366_29 * d
-        + 0.000_387_933 * t * t
-        - t * t * t / 38_710_000.0;
+    let gmst_deg =
+        280.460_618_37 + 360.985_647_366_29 * d + 0.000_387_933 * t * t - t * t * t / 38_710_000.0;
 
     // Normalize to [0, 360) then convert to radians
     let gmst_deg = gmst_deg.rem_euclid(360.0);
