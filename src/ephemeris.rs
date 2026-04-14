@@ -3,7 +3,11 @@
 
 use crate::coordinates::{cartesian_to_spherical, ecliptic_to_equatorial};
 use crate::ffi;
-use crate::propagate::{assist_propagate, NonGravParams};
+use crate::observatory::ObservatoryTable;
+use crate::orbit::Orbit;
+use crate::origin::Origin;
+use crate::propagate::assist_propagate;
+use crate::state::resolve_origin_state;
 use crate::wrappers::Ephemeris;
 use crate::Result;
 
@@ -20,13 +24,22 @@ pub struct EphemerisResult {
     pub epoch: f64,
 }
 
-/// Observer specification: pre-computed heliocentric ecliptic J2000 state.
+/// Observer specification: an origin and epoch.
+///
+/// The observer's heliocentric state is resolved internally from the origin.
 #[derive(Debug, Clone)]
 pub struct Observer {
-    /// Heliocentric ecliptic J2000 state [x, y, z, vx, vy, vz] (AU, AU/day).
-    pub state: [f64; 6],
+    /// Where the observer is (a body or observatory).
+    pub origin: Origin,
     /// Epoch (MJD TDB).
     pub epoch: f64,
+}
+
+impl Observer {
+    /// Create an observer at a named body or observatory at a given epoch.
+    pub fn new(origin: Origin, epoch: f64) -> Self {
+        Self { origin, epoch }
+    }
 }
 
 /// Generate ephemeris for a test orbit as seen from a set of observers.
@@ -38,18 +51,17 @@ pub struct Observer {
 ///
 /// # Arguments
 /// - `ephem`: ASSIST ephemeris data.
-/// - `orbit_state`: initial heliocentric ecliptic J2000 state (AU, AU/day).
-/// - `orbit_epoch`: initial epoch (MJD TDB).
-/// - `observers`: pre-computed observer states and epochs.
+/// - `orbit`: initial orbit (state, epoch, optional non-grav params).
+/// - `observers`: observer origins and epochs.
+/// - `obs_table`: optional observatory table (required if any observer is an `Observatory`).
 ///
 /// # Returns
 /// One `EphemerisResult` per observer, in the same order.
 pub fn assist_generate_ephemeris(
     ephem: &Ephemeris,
-    orbit_state: &[f64; 6],
-    orbit_epoch: f64,
+    orbit: &Orbit,
     observers: &[Observer],
-    non_grav: Option<&NonGravParams>,
+    obs_table: Option<&ObservatoryTable>,
 ) -> Result<Vec<EphemerisResult>> {
     if observers.is_empty() {
         return Ok(vec![]);
@@ -62,11 +74,10 @@ pub fn assist_generate_ephemeris(
     for obs in observers {
         let result = compute_single_ephemeris(
             ephem,
-            orbit_state,
-            orbit_epoch,
+            orbit,
             obs,
             c,
-            non_grav,
+            obs_table,
         )?;
         results.push(result);
     }
@@ -77,23 +88,26 @@ pub fn assist_generate_ephemeris(
 /// Compute ephemeris for a single observer with light-time iteration.
 fn compute_single_ephemeris(
     ephem: &Ephemeris,
-    orbit_state: &[f64; 6],
-    orbit_epoch: f64,
+    orbit: &Orbit,
     obs: &Observer,
     c: f64,
-    non_grav: Option<&NonGravParams>,
+    obs_table: Option<&ObservatoryTable>,
 ) -> Result<EphemerisResult> {
     let t_obs = obs.epoch;
 
+    // Resolve observer state
+    let obs_state = resolve_origin_state(ephem, &obs.origin, t_obs, obs_table)?;
+
     // Step 1: Propagate to observation epoch for initial distance estimate
-    let states = assist_propagate(ephem, orbit_state, orbit_epoch, &[t_obs], false, non_grav)?;
+    let prop_orbit = Orbit::new(orbit.state, orbit.epoch);
+    let states = assist_propagate(ephem, &prop_orbit, &[t_obs], false)?;
     let helio_ecl_obs = states[0].state;
 
     // Initial light-time estimate
     let dx = [
-        helio_ecl_obs[0] - obs.state[0],
-        helio_ecl_obs[1] - obs.state[1],
-        helio_ecl_obs[2] - obs.state[2],
+        helio_ecl_obs[0] - obs_state[0],
+        helio_ecl_obs[1] - obs_state[1],
+        helio_ecl_obs[2] - obs_state[2],
     ];
     let dist = (dx[0] * dx[0] + dx[1] * dx[1] + dx[2] * dx[2]).sqrt();
     let mut tau = dist / c;
@@ -106,15 +120,16 @@ fn compute_single_ephemeris(
     const TOL: f64 = 1e-13;
     let mut aberrated_state = helio_ecl_obs;
 
+    // Use the full orbit (with non-grav) for light-time iteration
     for _ in 0..MAX_ITER {
         let t_emit = t_obs - tau;
-        let emit_states = assist_propagate(ephem, orbit_state, orbit_epoch, &[t_emit], false, non_grav)?;
+        let emit_states = assist_propagate(ephem, orbit, &[t_emit], false)?;
         aberrated_state = emit_states[0].state;
 
         let dx_new = [
-            aberrated_state[0] - obs.state[0],
-            aberrated_state[1] - obs.state[1],
-            aberrated_state[2] - obs.state[2],
+            aberrated_state[0] - obs_state[0],
+            aberrated_state[1] - obs_state[1],
+            aberrated_state[2] - obs_state[2],
         ];
         let dist_new = (dx_new[0] * dx_new[0] + dx_new[1] * dx_new[1] + dx_new[2] * dx_new[2]).sqrt();
         let tau_new = dist_new / c;
@@ -140,7 +155,7 @@ fn compute_single_ephemeris(
     let sun_obs = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t_obs_a)?;
     let sun_emit = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t_emit_a)?;
 
-    let obs_helio_eq = ecliptic_to_equatorial(&obs.state);
+    let obs_helio_eq = ecliptic_to_equatorial(&obs_state);
     let obs_bary_eq = [
         obs_helio_eq[0] + sun_obs.x,
         obs_helio_eq[1] + sun_obs.y,

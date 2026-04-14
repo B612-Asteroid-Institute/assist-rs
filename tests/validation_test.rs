@@ -72,31 +72,30 @@ fn load_reference_data() -> Option<ReferenceData> {
 /// Returns (object_id, max_position_error_au, max_velocity_error).
 fn validate_orbit(
     ephem: &assist_rs::Ephemeris,
-    orbit: &OrbitEntry,
+    entry: &OrbitEntry,
 ) -> (String, f64, f64) {
-    let target_epochs: Vec<f64> = orbit.propagated.iter().map(|p| p.epoch).collect();
+    let orbit = assist_rs::Orbit::new(entry.initial_state, entry.epoch_mjd);
+    let target_epochs: Vec<f64> = entry.propagated.iter().map(|p| p.epoch).collect();
 
     let results = assist_rs::assist_propagate(
         ephem,
-        &orbit.initial_state,
-        orbit.epoch_mjd,
+        &orbit,
         &target_epochs,
         false,
-        None,
     )
-    .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", orbit.object_id));
+    .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", entry.object_id));
 
     assert_eq!(
         results.len(),
-        orbit.propagated.len(),
+        entry.propagated.len(),
         "Epoch count mismatch for {}",
-        orbit.object_id
+        entry.object_id
     );
 
     let mut max_pos_err = 0.0f64;
     let mut max_vel_err = 0.0f64;
 
-    for (rust_result, py_ref) in results.iter().zip(orbit.propagated.iter()) {
+    for (rust_result, py_ref) in results.iter().zip(entry.propagated.iter()) {
         // Position error (AU)
         let pos_err = ((rust_result.state[0] - py_ref.state[0]).powi(2)
             + (rust_result.state[1] - py_ref.state[1]).powi(2)
@@ -113,7 +112,7 @@ fn validate_orbit(
         max_vel_err = max_vel_err.max(vel_err);
     }
 
-    (orbit.object_id.clone(), max_pos_err, max_vel_err)
+    (entry.object_id.clone(), max_pos_err, max_vel_err)
 }
 
 #[test]
@@ -227,18 +226,20 @@ fn test_rayon_parallel_propagation() {
         .expect("Failed to load ephemeris");
 
     // Create 10 copies of a test orbit and propagate in parallel
-    let state = [
-        -1.938_169_72, 2.289_213_79, 1.094_048_30,
-        -0.008_744_54, -0.005_523_16, 0.001_174_22,
-    ];
-    let epoch = 60000.0;
-    let targets = vec![epoch + 10.0, epoch + 20.0, epoch + 30.0];
+    let orbit = assist_rs::Orbit::new(
+        [
+            -1.938_169_72, 2.289_213_79, 1.094_048_30,
+            -0.008_744_54, -0.005_523_16, 0.001_174_22,
+        ],
+        60000.0,
+    );
+    let targets = vec![orbit.epoch + 10.0, orbit.epoch + 20.0, orbit.epoch + 30.0];
 
     let n_orbits = 10;
     let results: Vec<_> = (0..n_orbits)
         .into_par_iter()
         .map(|_| {
-            assist_rs::assist_propagate(&ephem, &state, epoch, &targets, false, None)
+            assist_rs::assist_propagate(&ephem, &orbit, &targets, false)
                 .expect("Propagation failed")
         })
         .collect();

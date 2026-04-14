@@ -6,20 +6,53 @@ ASSIST uses REBOUND's IAS15 integrator (15th-order, adaptive step-size) to propa
 
 ## API
 
-Three high-level functions, all operating in **heliocentric ecliptic J2000** coordinates (AU, AU/day) with **MJD TDB** epochs:
+### Core types
+
+#### `Orbit`
+
+Bundles a state vector, epoch, and optional non-gravitational parameters:
+
+```rust
+// Gravity-only orbit
+let orbit = Orbit::new(
+    [x, y, z, vx, vy, vz],  // heliocentric ecliptic J2000 (AU, AU/day)
+    epoch_mjd,                // MJD TDB
+);
+
+// Orbit with non-gravitational forces
+let ng = NonGravParams::new(0.0, 1e-10, 0.0);  // A1, A2, A3
+let orbit = Orbit::with_non_grav([x, y, z, vx, vy, vz], epoch_mjd, ng);
+```
+
+#### `Origin`
+
+Identifies a solar system body or ground observatory:
+
+```rust
+Origin::Sun
+Origin::Earth
+Origin::Moon
+Origin::JupiterBarycenter    // giant planets are system barycenters
+Origin::SaturnBarycenter
+Origin::Observatory("I11".into())  // MPC observatory code
+Origin::SolarSystemBarycenter      // SSB
+
+// Parse from string (case-insensitive)
+Origin::parse("earth")       // → Origin::Earth
+Origin::parse("jupiter")     // → Origin::JupiterBarycenter
+Origin::parse("W84")         // → Origin::Observatory("W84")
+```
 
 ### `assist_propagate`
 
-N-body propagation of a test particle with optional state transition matrix (STM) via variational equations, and optional non-gravitational forces.
+N-body propagation of a test particle with optional state transition matrix (STM) via variational equations.
 
 ```rust
 let results = assist_propagate(
     &ephem,
-    &[x, y, z, vx, vy, vz],  // initial state
-    epoch_mjd,                 // initial epoch
-    &[t1, t2, t3],            // target epochs (sorted)
-    true,                      // compute STM
-    None,                      // non-gravitational params (or Some(&ng))
+    &orbit,              // Orbit (state + epoch + optional non-grav)
+    &[t1, t2, t3],      // target epochs (MJD TDB, sorted)
+    true,                // compute STM
 )?;
 // results[i].state  -> [f64; 6]
 // results[i].stm    -> Option<[[f64; 6]; 6]>
@@ -27,12 +60,13 @@ let results = assist_propagate(
 
 ### `assist_get_state`
 
-Query the state of any solar system body (by name) or ground observatory (by MPC code).
+Query the state of any solar system body or ground observatory at one or more epochs.
 
 ```rust
-let earth = assist_get_state(&ephem, "earth", 60000.0, None)?;
-let obs   = assist_get_state(&ephem, "I11", 60000.0, Some(&obs_table))?;
-// .state -> [f64; 6] heliocentric ecliptic J2000
+let earth = assist_get_state(&ephem, &Origin::Earth, &[60000.0, 60001.0], None)?;
+// earth[0].state -> [f64; 6] heliocentric ecliptic J2000
+
+let obs = assist_get_state(&ephem, &Origin::Observatory("I11".into()), &[60000.0], Some(&obs_table))?;
 ```
 
 ### `assist_generate_ephemeris`
@@ -42,10 +76,12 @@ Propagate an orbit to observer epochs with light-time correction, returning topo
 ```rust
 let results = assist_generate_ephemeris(
     &ephem,
-    &orbit_state,
-    orbit_epoch,
-    &[Observer { state: obs_state, epoch: obs_epoch }],
-    None,  // non-gravitational params
+    &orbit,
+    &[
+        Observer::new(Origin::Earth, 60010.0),
+        Observer::new(Origin::Observatory("I11".into()), 60011.0),
+    ],
+    Some(&obs_table),  // required if any observer is an Observatory
 )?;
 // results[i].spherical      -> [rho, ra, dec, drho, dra, ddec]
 // results[i].aberrated_state -> [f64; 6] light-time-corrected heliocentric
@@ -75,7 +111,8 @@ let ng = NonGravParams {
     r0: Some(2.808),
 };
 
-let results = assist_propagate(&ephem, &state, epoch, &targets, false, Some(&ng))?;
+let orbit = Orbit::with_non_grav(state, epoch, ng);
+let results = assist_propagate(&ephem, &orbit, &targets, false)?;
 ```
 
 ## Setup

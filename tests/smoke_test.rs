@@ -95,27 +95,25 @@ fn test_propagate_ceres() {
     };
 
     // Ceres heliocentric ecliptic J2000 state at MJD 60000.0 TDB
-    // (approximate — from JPL Horizons query for epoch 2023-Feb-25)
-    // x, y, z in AU; vx, vy, vz in AU/day
-    let ceres_state = [
-        -1.938_169_72,   // x
-         2.289_213_79,   // y
-         1.094_048_30,   // z
-        -0.008_744_54,   // vx
-        -0.005_523_16,   // vy
-         0.001_174_22,   // vz
-    ];
-    let epoch = 60000.0; // MJD TDB
+    let orbit = assist_rs::Orbit::new(
+        [
+            -1.938_169_72,   // x
+             2.289_213_79,   // y
+             1.094_048_30,   // z
+            -0.008_744_54,   // vx
+            -0.005_523_16,   // vy
+             0.001_174_22,   // vz
+        ],
+        60000.0,
+    );
 
     // Propagate 30 days forward
-    let target = [epoch + 30.0];
+    let target = [orbit.epoch + 30.0];
     let results = assist_rs::assist_propagate(
         &ephem,
-        &ceres_state,
-        epoch,
+        &orbit,
         &target,
         false,
-        None,
     ).unwrap();
 
     assert_eq!(results.len(), 1);
@@ -129,9 +127,9 @@ fn test_propagate_ceres() {
     );
 
     // Position should have changed by ~0.2-0.3 AU over 30 days
-    let dx = r.state[0] - ceres_state[0];
-    let dy = r.state[1] - ceres_state[1];
-    let dz = r.state[2] - ceres_state[2];
+    let dx = r.state[0] - orbit.state[0];
+    let dy = r.state[1] - orbit.state[1];
+    let dz = r.state[2] - orbit.state[2];
     let displacement = (dx * dx + dy * dy + dz * dz).sqrt();
     assert!(
         displacement > 0.05 && displacement < 1.0,
@@ -148,32 +146,30 @@ fn test_propagate_with_stm() {
         return;
     };
 
-    // Simple test: propagate a particle and get STM
-    let state = [
-        -1.938_169_72,
-         2.289_213_79,
-         1.094_048_30,
-        -0.008_744_54,
-        -0.005_523_16,
-         0.001_174_22,
-    ];
-    let epoch = 60000.0;
-    let target = [epoch + 10.0];
+    let orbit = assist_rs::Orbit::new(
+        [
+            -1.938_169_72,
+             2.289_213_79,
+             1.094_048_30,
+            -0.008_744_54,
+            -0.005_523_16,
+             0.001_174_22,
+        ],
+        60000.0,
+    );
+    let target = [orbit.epoch + 10.0];
 
     let results = assist_rs::assist_propagate(
         &ephem,
-        &state,
-        epoch,
+        &orbit,
         &target,
         true,
-        None,
     ).unwrap();
 
     assert_eq!(results.len(), 1);
     let stm = results[0].stm.expect("STM should be populated");
 
     // STM should be close to identity for short propagation
-    // Diagonal elements should be approximately 1.0
     for i in 0..6 {
         assert!(
             stm[i][i].abs() > 0.5 && stm[i][i].abs() < 2.0,
@@ -194,22 +190,22 @@ fn test_get_state() {
     };
 
     // Get Sun's heliocentric state (should be ~0)
-    let sun = assist_rs::assist_get_state(&ephem, "sun", 60000.0, None).unwrap();
-    let sun_dist = (sun.state[0] * sun.state[0] + sun.state[1] * sun.state[1] + sun.state[2] * sun.state[2]).sqrt();
+    let sun = assist_rs::assist_get_state(&ephem, &assist_rs::Origin::Sun, &[60000.0], None).unwrap();
+    let sun_dist = (sun[0].state[0] * sun[0].state[0] + sun[0].state[1] * sun[0].state[1] + sun[0].state[2] * sun[0].state[2]).sqrt();
     assert!(
         sun_dist < 0.01,
         "Sun heliocentric distance should be ~0, got {sun_dist} AU"
     );
 
     // Get Earth's heliocentric state
-    let earth = assist_rs::assist_get_state(&ephem, "earth", 60000.0, None).unwrap();
-    let earth_dist = (earth.state[0] * earth.state[0] + earth.state[1] * earth.state[1] + earth.state[2] * earth.state[2]).sqrt();
+    let earth = assist_rs::assist_get_state(&ephem, &assist_rs::Origin::Earth, &[60000.0], None).unwrap();
+    let earth_dist = (earth[0].state[0] * earth[0].state[0] + earth[0].state[1] * earth[0].state[1] + earth[0].state[2] * earth[0].state[2]).sqrt();
     assert!(
         earth_dist > 0.98 && earth_dist < 1.02,
         "Earth heliocentric distance: {earth_dist} AU"
     );
 
-    eprintln!("Earth heliocentric ecliptic at MJD 60000: {:?}", earth.state);
+    eprintln!("Earth heliocentric ecliptic at MJD 60000: {:?}", earth[0].state);
 }
 
 #[test]
@@ -219,24 +215,21 @@ fn test_generate_ephemeris() {
         return;
     };
 
-    // Use Ceres state
-    let orbit_state = [
-        -1.938_169_72, 2.289_213_79, 1.094_048_30,
-        -0.008_744_54, -0.005_523_16, 0.001_174_22,
-    ];
-    let orbit_epoch = 60000.0;
+    // Use Ceres orbit
+    let orbit = assist_rs::Orbit::new(
+        [
+            -1.938_169_72, 2.289_213_79, 1.094_048_30,
+            -0.008_744_54, -0.005_523_16, 0.001_174_22,
+        ],
+        60000.0,
+    );
 
     // Observer at geocenter
-    let earth = assist_rs::assist_get_state(&ephem, "earth", 60010.0, None).unwrap();
-    let observer = assist_rs::ephemeris::Observer {
-        state: earth.state,
-        epoch: 60010.0,
-    };
+    let observer = assist_rs::Observer::new(assist_rs::Origin::Earth, 60010.0);
 
     let results = assist_rs::assist_generate_ephemeris(
         &ephem,
-        &orbit_state,
-        orbit_epoch,
+        &orbit,
         &[observer],
         None,
     ).unwrap();
@@ -286,7 +279,6 @@ fn test_propagate_with_non_grav() {
         return;
     };
 
-    // Use Ceres state at MJD 60000
     let ceres_state = [
         -1.938_169_72,
          2.289_213_79,
@@ -299,28 +291,25 @@ fn test_propagate_with_non_grav() {
     let target = [epoch + 30.0];
 
     // Propagate without non-grav forces (baseline)
+    let orbit_grav = assist_rs::Orbit::new(ceres_state, epoch);
     let baseline = assist_rs::assist_propagate(
         &ephem,
-        &ceres_state,
-        epoch,
+        &orbit_grav,
         &target,
         false,
-        None,
     ).unwrap();
 
     // Propagate with a small transverse non-grav acceleration (A2)
-    // A2 = 1e-10 AU/day² is a typical cometary value
     let ng = assist_rs::NonGravParams::new(0.0, 1e-10, 0.0);
+    let orbit_ng = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng);
     let with_ng = assist_rs::assist_propagate(
         &ephem,
-        &ceres_state,
-        epoch,
+        &orbit_ng,
         &target,
         false,
-        Some(&ng),
     ).unwrap();
 
-    // The states should differ — non-grav acceleration changes the orbit
+    // The states should differ
     let dx: f64 = (0..6)
         .map(|i| (baseline[0].state[i] - with_ng[0].state[i]).powi(2))
         .sum::<f64>()

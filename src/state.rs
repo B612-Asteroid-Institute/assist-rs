@@ -3,6 +3,7 @@
 use crate::coordinates::equatorial_to_ecliptic;
 use crate::ffi;
 use crate::observatory::ObservatoryTable;
+use crate::origin::Origin;
 use crate::wrappers::Ephemeris;
 use crate::{Error, Result};
 
@@ -15,78 +16,73 @@ pub struct BodyState {
     pub epoch: f64,
 }
 
-/// Body identifiers that `assist_get_state` accepts.
-#[derive(Debug, Clone)]
-pub enum Target {
-    /// Solar system body by ASSIST ID.
-    Body(i32),
-    /// MPC observatory code (e.g., "I11", "W84", "500").
-    Observatory(String),
-}
-
-impl Target {
-    /// Parse a target string: body names map to ASSIST IDs, anything else
-    /// is treated as an MPC observatory code.
-    pub fn parse(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "sun" => Target::Body(ffi::ASSIST_BODY_SUN),
-            "mercury" => Target::Body(ffi::ASSIST_BODY_MERCURY),
-            "venus" => Target::Body(ffi::ASSIST_BODY_VENUS),
-            "earth" => Target::Body(ffi::ASSIST_BODY_EARTH),
-            "moon" => Target::Body(ffi::ASSIST_BODY_MOON),
-            "mars" => Target::Body(ffi::ASSIST_BODY_MARS),
-            "jupiter" => Target::Body(ffi::ASSIST_BODY_JUPITER),
-            "saturn" => Target::Body(ffi::ASSIST_BODY_SATURN),
-            "uranus" => Target::Body(ffi::ASSIST_BODY_URANUS),
-            "neptune" => Target::Body(ffi::ASSIST_BODY_NEPTUNE),
-            "pluto" => Target::Body(ffi::ASSIST_BODY_PLUTO),
-            _ => Target::Observatory(s.to_string()),
-        }
-    }
-}
-
-/// Get the heliocentric ecliptic J2000 state of a body or observatory.
+/// Get the heliocentric ecliptic J2000 state of a body or observatory at one or more epochs.
 ///
-/// For solar system bodies, queries the ASSIST ephemeris directly.
-/// For observatories, computes the geocentric position from parallax
-/// coefficients and adds it to Earth's heliocentric state.
+/// # Arguments
+/// - `ephem`: ASSIST ephemeris data.
+/// - `origin`: the body or observatory to query.
+/// - `epochs`: one or more epochs (MJD TDB).
+/// - `obs_table`: optional observatory table (required if origin is an `Observatory`).
+///
+/// # Returns
+/// One `BodyState` per epoch, in the same order.
 pub fn assist_get_state(
     ephem: &Ephemeris,
-    target: &str,
+    origin: &Origin,
+    epochs: &[f64],
+    obs_table: Option<&ObservatoryTable>,
+) -> Result<Vec<BodyState>> {
+    let mut results = Vec::with_capacity(epochs.len());
+    for &epoch_mjd in epochs {
+        let state = resolve_origin_state(ephem, origin, epoch_mjd, obs_table)?;
+        results.push(BodyState {
+            state,
+            epoch: epoch_mjd,
+        });
+    }
+    Ok(results)
+}
+
+/// Resolve the heliocentric ecliptic J2000 state of an origin at a single epoch.
+///
+/// Used internally by both `assist_get_state` and `assist_generate_ephemeris`.
+pub(crate) fn resolve_origin_state(
+    ephem: &Ephemeris,
+    origin: &Origin,
     epoch_mjd: f64,
     obs_table: Option<&ObservatoryTable>,
-) -> Result<BodyState> {
+) -> Result<[f64; 6]> {
     let jd_ref = ephem.jd_ref();
     let t = mjd_to_assist_time(epoch_mjd, jd_ref);
 
-    match Target::parse(target) {
-        Target::Body(body_id) => {
-            // Get body state in barycentric equatorial ICRF
-            let p = ephem.get_body_state(body_id, t)?;
-            let bary_eq = [p.x, p.y, p.z, p.vx, p.vy, p.vz];
+    if let Some(body_id) = origin.body_id() {
+        // Named body: query ephemeris
+        let p = ephem.get_body_state(body_id, t)?;
+        let bary_eq = [p.x, p.y, p.z, p.vx, p.vy, p.vz];
 
-            // Convert to heliocentric: subtract Sun
-            let sun = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t)?;
-            let helio_eq = [
-                bary_eq[0] - sun.x,
-                bary_eq[1] - sun.y,
-                bary_eq[2] - sun.z,
-                bary_eq[3] - sun.vx,
-                bary_eq[4] - sun.vy,
-                bary_eq[5] - sun.vz,
-            ];
-
-            Ok(BodyState {
-                state: equatorial_to_ecliptic(&helio_eq),
-                epoch: epoch_mjd,
-            })
-        }
-        Target::Observatory(code) => {
-            let table = obs_table.ok_or_else(|| {
-                Error::Other("Observatory table required for observatory codes".into())
-            })?;
-            compute_observatory_state(ephem, &code, epoch_mjd, t, table)
-        }
+        // Convert to heliocentric: subtract Sun
+        let sun = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t)?;
+        let helio_eq = [
+            bary_eq[0] - sun.x,
+            bary_eq[1] - sun.y,
+            bary_eq[2] - sun.z,
+            bary_eq[3] - sun.vx,
+            bary_eq[4] - sun.vy,
+            bary_eq[5] - sun.vz,
+        ];
+        Ok(equatorial_to_ecliptic(&helio_eq))
+    } else if let Origin::SolarSystemBarycenter = origin {
+        // SSB in heliocentric = -Sun_bary
+        let sun = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t)?;
+        let helio_eq = [-sun.x, -sun.y, -sun.z, -sun.vx, -sun.vy, -sun.vz];
+        Ok(equatorial_to_ecliptic(&helio_eq))
+    } else if let Origin::Observatory(code) = origin {
+        let table = obs_table.ok_or_else(|| {
+            Error::Other("Observatory table required for observatory codes".into())
+        })?;
+        compute_observatory_state(ephem, code, t, table)
+    } else {
+        unreachable!()
     }
 }
 
@@ -94,11 +90,9 @@ pub fn assist_get_state(
 fn compute_observatory_state(
     ephem: &Ephemeris,
     code: &str,
-    epoch_mjd: f64,
     t: f64,
     obs_table: &ObservatoryTable,
-) -> Result<BodyState> {
-    // Geocentric observatory (code "500"): use Earth center directly
+) -> Result<[f64; 6]> {
     let entry = obs_table.get(code).ok_or_else(|| {
         Error::InvalidObservatory(format!("Unknown MPC code: {code}"))
     })?;
@@ -117,16 +111,15 @@ fn compute_observatory_state(
             earth.vy - sun.vy,
             earth.vz - sun.vz,
         ];
-        return Ok(BodyState {
-            state: equatorial_to_ecliptic(&helio_eq),
-            epoch: epoch_mjd,
-        });
+        return Ok(equatorial_to_ecliptic(&helio_eq));
     }
 
     // Compute observatory ECEF position from parallax coefficients
     let earth_radius_au = ephem.earth_radius_au();
     let lon_rad = entry.longitude_deg.to_radians();
-    let gmst = compute_gmst(epoch_mjd);
+    let jd = t + ephem.jd_ref();
+    let mjd = jd - 2_400_000.5;
+    let gmst = compute_gmst(mjd);
     let theta = gmst + lon_rad; // local sidereal angle
 
     // Position in equatorial frame (AU, relative to Earth center)
@@ -151,10 +144,7 @@ fn compute_observatory_state(
         (earth.vz + obs_vz) - sun.vz,
     ];
 
-    Ok(BodyState {
-        state: equatorial_to_ecliptic(&helio_eq),
-        epoch: epoch_mjd,
-    })
+    Ok(equatorial_to_ecliptic(&helio_eq))
 }
 
 /// Greenwich Mean Sidereal Time in radians.

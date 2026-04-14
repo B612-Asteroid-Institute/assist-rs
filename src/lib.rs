@@ -14,14 +14,18 @@ mod wrappers;
 
 pub use wrappers::{AssistSim, Ephemeris, Simulation};
 
+mod orbit;
+mod origin;
 mod propagate;
 mod state;
 pub mod ephemeris;
-mod observatory;
 pub mod coordinates;
+mod observatory;
 
-pub use propagate::{assist_propagate, NonGravParams, PropagatedState};
-pub use state::{assist_get_state, BodyState, Target};
+pub use orbit::{NonGravParams, Orbit};
+pub use origin::Origin;
+pub use propagate::{assist_propagate, PropagatedState};
+pub use state::{assist_get_state, BodyState};
 pub use ephemeris::{assist_generate_ephemeris, EphemerisResult, Observer};
 pub use observatory::ObservatoryTable;
 pub use coordinates::{equatorial_to_ecliptic, ecliptic_to_equatorial};

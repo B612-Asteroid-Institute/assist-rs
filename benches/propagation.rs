@@ -42,6 +42,10 @@ const CERES_STATE: [f64; 6] = [
 ];
 const EPOCH: f64 = 60000.0;
 
+fn ceres_orbit() -> assist_rs::Orbit {
+    assist_rs::Orbit::new(CERES_STATE, EPOCH)
+}
+
 // ---------------------------------------------------------------------------
 // Rust high-level API benchmarks
 // ---------------------------------------------------------------------------
@@ -52,6 +56,7 @@ fn bench_propagate_single(c: &mut Criterion) {
         return;
     };
 
+    let orbit = ceres_orbit();
     let mut group = c.benchmark_group("propagate_single");
 
     // Propagate to N epochs over 30 days
@@ -67,11 +72,9 @@ fn bench_propagate_single(c: &mut Criterion) {
                 b.iter(|| {
                     assist_rs::assist_propagate(
                         &ephem,
-                        &CERES_STATE,
-                        EPOCH,
+                        &orbit,
                         targets,
                         false,
-                        None,
                     )
                     .unwrap()
                 });
@@ -85,18 +88,19 @@ fn bench_propagate_single(c: &mut Criterion) {
 fn bench_propagate_with_stm(c: &mut Criterion) {
     let Some(ephem) = load_ephem() else { return };
 
+    let orbit = ceres_orbit();
     let targets = vec![EPOCH + 30.0];
 
     c.benchmark_group("propagate_stm")
         .bench_function("without_stm", |b| {
             b.iter(|| {
-                assist_rs::assist_propagate(&ephem, &CERES_STATE, EPOCH, &targets, false, None)
+                assist_rs::assist_propagate(&ephem, &orbit, &targets, false)
                     .unwrap()
             });
         })
         .bench_function("with_stm", |b| {
             b.iter(|| {
-                assist_rs::assist_propagate(&ephem, &CERES_STATE, EPOCH, &targets, true, None)
+                assist_rs::assist_propagate(&ephem, &orbit, &targets, true)
                     .unwrap()
             });
         });
@@ -105,27 +109,22 @@ fn bench_propagate_with_stm(c: &mut Criterion) {
 fn bench_propagate_with_nongrav(c: &mut Criterion) {
     let Some(ephem) = load_ephem() else { return };
 
-    let targets = vec![EPOCH + 30.0];
+    let orbit_grav = ceres_orbit();
     let ng = assist_rs::NonGravParams::new(0.0, 1e-10, 0.0);
+    let orbit_ng = assist_rs::Orbit::with_non_grav(CERES_STATE, EPOCH, ng);
+    let targets = vec![EPOCH + 30.0];
 
     c.benchmark_group("propagate_nongrav")
         .bench_function("gravity_only", |b| {
             b.iter(|| {
-                assist_rs::assist_propagate(&ephem, &CERES_STATE, EPOCH, &targets, false, None)
+                assist_rs::assist_propagate(&ephem, &orbit_grav, &targets, false)
                     .unwrap()
             });
         })
         .bench_function("with_a2", |b| {
             b.iter(|| {
-                assist_rs::assist_propagate(
-                    &ephem,
-                    &CERES_STATE,
-                    EPOCH,
-                    &targets,
-                    false,
-                    Some(&ng),
-                )
-                .unwrap()
+                assist_rs::assist_propagate(&ephem, &orbit_ng, &targets, false)
+                    .unwrap()
             });
         });
 }
@@ -179,7 +178,6 @@ fn bench_rust_vs_raw_c(c: &mut Criterion) {
     let Some(ephem) = load_ephem() else { return };
 
     // Pre-compute the barycentric equatorial state for the raw C path
-    // (the Rust API does this transform internally)
     let jd_ref = ephem.jd_ref();
     let t0 = (EPOCH + 2_400_000.5) - jd_ref;
     let eq_state = assist_rs::coordinates::ecliptic_to_equatorial(&CERES_STATE);
@@ -196,13 +194,14 @@ fn bench_rust_vs_raw_c(c: &mut Criterion) {
     ];
     let t_target = ((EPOCH + 30.0) + 2_400_000.5) - jd_ref;
 
+    let orbit = ceres_orbit();
     let targets = vec![EPOCH + 30.0];
 
     let mut group = c.benchmark_group("rust_vs_raw_c");
 
     group.bench_function("rust_api", |b| {
         b.iter(|| {
-            assist_rs::assist_propagate(&ephem, &CERES_STATE, EPOCH, &targets, false, None)
+            assist_rs::assist_propagate(&ephem, &orbit, &targets, false)
                 .unwrap()
         });
     });
@@ -222,11 +221,11 @@ fn bench_parallel_propagation(c: &mut Criterion) {
     let Some(ephem) = load_ephem() else { return };
 
     // 28 slightly different orbits (perturb velocity slightly)
-    let orbits: Vec<[f64; 6]> = (0..28)
+    let orbits: Vec<assist_rs::Orbit> = (0..28)
         .map(|i| {
             let mut s = CERES_STATE;
             s[3] += (i as f64) * 1e-6;
-            s
+            assist_rs::Orbit::new(s, EPOCH)
         })
         .collect();
     let targets = vec![EPOCH + 30.0];
@@ -237,8 +236,8 @@ fn bench_parallel_propagation(c: &mut Criterion) {
         b.iter(|| {
             orbits
                 .iter()
-                .map(|state| {
-                    assist_rs::assist_propagate(&ephem, state, EPOCH, &targets, false, None)
+                .map(|orbit| {
+                    assist_rs::assist_propagate(&ephem, orbit, &targets, false)
                         .unwrap()
                 })
                 .collect::<Vec<_>>()
@@ -250,8 +249,8 @@ fn bench_parallel_propagation(c: &mut Criterion) {
         b.iter(|| {
             orbits
                 .par_iter()
-                .map(|state| {
-                    assist_rs::assist_propagate(&ephem, state, EPOCH, &targets, false, None)
+                .map(|orbit| {
+                    assist_rs::assist_propagate(&ephem, orbit, &targets, false)
                         .unwrap()
                 })
                 .collect::<Vec<_>>()
@@ -268,6 +267,7 @@ fn bench_parallel_propagation(c: &mut Criterion) {
 fn bench_duration_scaling(c: &mut Criterion) {
     let Some(ephem) = load_ephem() else { return };
 
+    let orbit = ceres_orbit();
     let mut group = c.benchmark_group("duration_scaling");
 
     for days in [1, 10, 30, 100, 365] {
@@ -279,11 +279,9 @@ fn bench_duration_scaling(c: &mut Criterion) {
                 b.iter(|| {
                     assist_rs::assist_propagate(
                         &ephem,
-                        &CERES_STATE,
-                        EPOCH,
+                        &orbit,
                         targets,
                         false,
-                        None,
                     )
                     .unwrap()
                 });

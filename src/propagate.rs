@@ -2,57 +2,9 @@
 
 use crate::coordinates::{ecliptic_to_equatorial, equatorial_to_ecliptic, rotate_matrix_eq_to_ecl};
 use crate::ffi;
+use crate::orbit::Orbit;
 use crate::wrappers::{AssistSim, Ephemeris, Simulation};
 use crate::{Error, Result};
-
-/// Marsden-Sekanina non-gravitational force parameters.
-///
-/// The non-gravitational acceleration uses the RTN (radial/transverse/normal)
-/// decomposition with a g(r) model:
-///
-/// ```text
-/// a_ng = g(r) * (A1·r̂ + A2·t̂ + A3·n̂)
-/// g(r) = α * (r/r₀)^(-m) * (1 + (r/r₀)^n)^(-k)
-/// ```
-///
-/// Default model parameters (α=1, m=2, n=5.093, k=0, r₀=1 AU) give
-/// g(r) = r⁻² — a pure inverse-square law. The Marsden-Sekanina water ice
-/// sublimation model uses α=0.111262, m=2.15, n=5.093, k=4.6142, r₀=2.808 AU.
-#[derive(Debug, Clone)]
-pub struct NonGravParams {
-    /// Radial non-grav coefficient A1 (AU/day²).
-    pub a1: f64,
-    /// Transverse non-grav coefficient A2 (AU/day²).
-    pub a2: f64,
-    /// Normal non-grav coefficient A3 (AU/day²).
-    pub a3: f64,
-    /// g(r) normalization. Default: 1.0.
-    pub alpha: Option<f64>,
-    /// g(r) exponent k. Default: 0.0.
-    pub nk: Option<f64>,
-    /// g(r) exponent m. Default: 2.0.
-    pub nm: Option<f64>,
-    /// g(r) exponent n. Default: 5.093.
-    pub nn: Option<f64>,
-    /// g(r) scale distance in AU. Default: 1.0.
-    pub r0: Option<f64>,
-}
-
-impl NonGravParams {
-    /// Create non-grav params with the default g(r) = r⁻² model.
-    pub fn new(a1: f64, a2: f64, a3: f64) -> Self {
-        Self {
-            a1,
-            a2,
-            a3,
-            alpha: None,
-            nk: None,
-            nm: None,
-            nn: None,
-            r0: None,
-        }
-    }
-}
 
 /// Result of propagating to a single epoch.
 #[derive(Debug, Clone)]
@@ -67,12 +19,11 @@ pub struct PropagatedState {
     pub stm: Option<[[f64; 6]; 6]>,
 }
 
-/// Propagate a test particle from an initial heliocentric ecliptic J2000 state.
+/// Propagate a test particle from an initial heliocentric ecliptic J2000 orbit.
 ///
 /// # Arguments
 /// - `ephem`: ASSIST ephemeris data.
-/// - `state`: initial [x, y, z, vx, vy, vz] in heliocentric ecliptic J2000 (AU, AU/day).
-/// - `epoch`: initial epoch (MJD TDB).
+/// - `orbit`: initial orbit (state, epoch, optional non-grav params).
 /// - `target_epochs`: sorted slice of target epochs (MJD TDB).
 /// - `compute_stm`: whether to compute the state transition matrix via variational equations.
 ///
@@ -80,21 +31,19 @@ pub struct PropagatedState {
 /// One `PropagatedState` per target epoch, in the same order.
 pub fn assist_propagate(
     ephem: &Ephemeris,
-    state: &[f64; 6],
-    epoch: f64,
+    orbit: &Orbit,
     target_epochs: &[f64],
     compute_stm: bool,
-    non_grav: Option<&NonGravParams>,
 ) -> Result<Vec<PropagatedState>> {
     if target_epochs.is_empty() {
         return Ok(vec![]);
     }
 
     let jd_ref = ephem.jd_ref();
-    let t0 = mjd_to_assist_time(epoch, jd_ref);
+    let t0 = mjd_to_assist_time(orbit.epoch, jd_ref);
 
     // Convert heliocentric ecliptic → barycentric equatorial ICRF
-    let eq_state = ecliptic_to_equatorial(state);
+    let eq_state = ecliptic_to_equatorial(&orbit.state);
     let sun = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t0)?;
     let bary_state = [
         eq_state[0] + sun.x,
@@ -111,6 +60,7 @@ pub fn assist_propagate(
     let mut asim = AssistSim::new(sim, ephem)?;
 
     // Set force model: default + non-gravitational if requested
+    let non_grav = orbit.non_grav.as_ref();
     let mut forces = ffi::ASSIST_FORCES_DEFAULT;
     if non_grav.is_some() {
         forces |= ffi::ASSIST_FORCE_NON_GRAVITATIONAL;
