@@ -137,6 +137,11 @@ impl Ephemeris {
         Ok(Self { ptr })
     }
 
+    /// Raw pointer to the underlying `assist_ephem`. Useful for direct FFI calls.
+    pub fn as_ptr(&self) -> *mut ffi::assist_ephem {
+        self.ptr
+    }
+
     /// Reference Julian date for the ephemeris (typically 2451545.0 = J2000.0 TDB).
     pub fn jd_ref(&self) -> f64 {
         unsafe { ffi::assist_rs_ephem_get_jd_ref(self.ptr) }

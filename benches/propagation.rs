@@ -1,0 +1,310 @@
+//! Benchmarks for assist-rs propagation.
+//!
+//! Requires ephemeris data files. Set environment variables:
+//!   ASSIST_PLANETS_PATH  — path to de440.bsp
+//!   ASSIST_ASTEROIDS_PATH — path to sb441-n16.bsp
+//!
+//! Run with:
+//!   cargo bench
+//!
+//! Compares:
+//! - Rust high-level API (`assist_propagate`) which includes coordinate
+//!   transforms, RAII setup/teardown, and error handling
+//! - Raw C FFI calls (same integration, no coordinate transforms or wrappers)
+//!   to measure the overhead of the Rust API layer
+
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use std::path::PathBuf;
+
+// ---------------------------------------------------------------------------
+// Ephemeris loading (shared across benchmarks)
+// ---------------------------------------------------------------------------
+
+fn ephem_paths() -> Option<(PathBuf, PathBuf)> {
+    let planets = std::env::var("ASSIST_PLANETS_PATH").ok()?;
+    let asteroids = std::env::var("ASSIST_ASTEROIDS_PATH").ok()?;
+    Some((PathBuf::from(planets), PathBuf::from(asteroids)))
+}
+
+fn load_ephem() -> Option<assist_rs::Ephemeris> {
+    let (planets, asteroids) = ephem_paths()?;
+    assist_rs::Ephemeris::from_paths(&planets, &asteroids).ok()
+}
+
+// Ceres heliocentric ecliptic J2000 at MJD 60000.0 TDB
+const CERES_STATE: [f64; 6] = [
+    -1.938_169_72,
+     2.289_213_79,
+     1.094_048_30,
+    -0.008_744_54,
+    -0.005_523_16,
+     0.001_174_22,
+];
+const EPOCH: f64 = 60000.0;
+
+// ---------------------------------------------------------------------------
+// Rust high-level API benchmarks
+// ---------------------------------------------------------------------------
+
+fn bench_propagate_single(c: &mut Criterion) {
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping benchmarks: ASSIST_PLANETS_PATH / ASSIST_ASTEROIDS_PATH not set");
+        return;
+    };
+
+    let mut group = c.benchmark_group("propagate_single");
+
+    // Propagate to N epochs over 30 days
+    for n_epochs in [1, 10, 100] {
+        let targets: Vec<f64> = (1..=n_epochs)
+            .map(|i| EPOCH + 30.0 * (i as f64) / (n_epochs as f64))
+            .collect();
+
+        group.bench_with_input(
+            BenchmarkId::new("rust_api", n_epochs),
+            &targets,
+            |b, targets| {
+                b.iter(|| {
+                    assist_rs::assist_propagate(
+                        &ephem,
+                        &CERES_STATE,
+                        EPOCH,
+                        targets,
+                        false,
+                        None,
+                    )
+                    .unwrap()
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_propagate_with_stm(c: &mut Criterion) {
+    let Some(ephem) = load_ephem() else { return };
+
+    let targets = vec![EPOCH + 30.0];
+
+    c.benchmark_group("propagate_stm")
+        .bench_function("without_stm", |b| {
+            b.iter(|| {
+                assist_rs::assist_propagate(&ephem, &CERES_STATE, EPOCH, &targets, false, None)
+                    .unwrap()
+            });
+        })
+        .bench_function("with_stm", |b| {
+            b.iter(|| {
+                assist_rs::assist_propagate(&ephem, &CERES_STATE, EPOCH, &targets, true, None)
+                    .unwrap()
+            });
+        });
+}
+
+fn bench_propagate_with_nongrav(c: &mut Criterion) {
+    let Some(ephem) = load_ephem() else { return };
+
+    let targets = vec![EPOCH + 30.0];
+    let ng = assist_rs::NonGravParams::new(0.0, 1e-10, 0.0);
+
+    c.benchmark_group("propagate_nongrav")
+        .bench_function("gravity_only", |b| {
+            b.iter(|| {
+                assist_rs::assist_propagate(&ephem, &CERES_STATE, EPOCH, &targets, false, None)
+                    .unwrap()
+            });
+        })
+        .bench_function("with_a2", |b| {
+            b.iter(|| {
+                assist_rs::assist_propagate(
+                    &ephem,
+                    &CERES_STATE,
+                    EPOCH,
+                    &targets,
+                    false,
+                    Some(&ng),
+                )
+                .unwrap()
+            });
+        });
+}
+
+// ---------------------------------------------------------------------------
+// Raw C FFI benchmark — same integration, no Rust wrapper overhead
+// ---------------------------------------------------------------------------
+
+/// Propagate using raw FFI calls: no coordinate transforms, no RAII overhead
+/// beyond what's needed for memory safety. This isolates the C integration time.
+fn raw_c_propagate(
+    ephem: &assist_rs::Ephemeris,
+    bary_eq_state: &[f64; 6],
+    t0: f64,
+    t_target: f64,
+) -> [f64; 6] {
+    use assist_rs::ffi;
+    unsafe {
+        let sim = ffi::reb_simulation_create();
+        ffi::assist_rs_sim_set_t(sim, t0);
+        ffi::assist_rs_sim_set_exact_finish_time(sim, 1);
+
+        let ax = ffi::assist_attach(sim, ephem.as_ptr());
+
+        let p = ffi::reb_particle {
+            x: bary_eq_state[0],
+            y: bary_eq_state[1],
+            z: bary_eq_state[2],
+            vx: bary_eq_state[3],
+            vy: bary_eq_state[4],
+            vz: bary_eq_state[5],
+            ..Default::default()
+        };
+        ffi::reb_simulation_add(sim, p);
+
+        ffi::reb_simulation_integrate(sim, t_target);
+
+        let particles = ffi::assist_rs_sim_get_particles(sim);
+        let pp = &*particles;
+        let result = [pp.x, pp.y, pp.z, pp.vx, pp.vy, pp.vz];
+
+        ffi::assist_detach(sim, ax);
+        ffi::assist_free(ax);
+        ffi::reb_simulation_free(sim);
+
+        result
+    }
+}
+
+fn bench_rust_vs_raw_c(c: &mut Criterion) {
+    let Some(ephem) = load_ephem() else { return };
+
+    // Pre-compute the barycentric equatorial state for the raw C path
+    // (the Rust API does this transform internally)
+    let jd_ref = ephem.jd_ref();
+    let t0 = (EPOCH + 2_400_000.5) - jd_ref;
+    let eq_state = assist_rs::coordinates::ecliptic_to_equatorial(&CERES_STATE);
+    let sun = ephem
+        .get_body_state(assist_rs::ffi::ASSIST_BODY_SUN, t0)
+        .unwrap();
+    let bary_eq = [
+        eq_state[0] + sun.x,
+        eq_state[1] + sun.y,
+        eq_state[2] + sun.z,
+        eq_state[3] + sun.vx,
+        eq_state[4] + sun.vy,
+        eq_state[5] + sun.vz,
+    ];
+    let t_target = ((EPOCH + 30.0) + 2_400_000.5) - jd_ref;
+
+    let targets = vec![EPOCH + 30.0];
+
+    let mut group = c.benchmark_group("rust_vs_raw_c");
+
+    group.bench_function("rust_api", |b| {
+        b.iter(|| {
+            assist_rs::assist_propagate(&ephem, &CERES_STATE, EPOCH, &targets, false, None)
+                .unwrap()
+        });
+    });
+
+    group.bench_function("raw_c_ffi", |b| {
+        b.iter(|| raw_c_propagate(&ephem, &bary_eq, t0, t_target));
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Parallel propagation benchmark (rayon)
+// ---------------------------------------------------------------------------
+
+fn bench_parallel_propagation(c: &mut Criterion) {
+    let Some(ephem) = load_ephem() else { return };
+
+    // 28 slightly different orbits (perturb velocity slightly)
+    let orbits: Vec<[f64; 6]> = (0..28)
+        .map(|i| {
+            let mut s = CERES_STATE;
+            s[3] += (i as f64) * 1e-6;
+            s
+        })
+        .collect();
+    let targets = vec![EPOCH + 30.0];
+
+    let mut group = c.benchmark_group("parallel");
+
+    group.bench_function("serial_28_orbits", |b| {
+        b.iter(|| {
+            orbits
+                .iter()
+                .map(|state| {
+                    assist_rs::assist_propagate(&ephem, state, EPOCH, &targets, false, None)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+        });
+    });
+
+    group.bench_function("rayon_28_orbits", |b| {
+        use rayon::prelude::*;
+        b.iter(|| {
+            orbits
+                .par_iter()
+                .map(|state| {
+                    assist_rs::assist_propagate(&ephem, state, EPOCH, &targets, false, None)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+        });
+    });
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Propagation duration scaling
+// ---------------------------------------------------------------------------
+
+fn bench_duration_scaling(c: &mut Criterion) {
+    let Some(ephem) = load_ephem() else { return };
+
+    let mut group = c.benchmark_group("duration_scaling");
+
+    for days in [1, 10, 30, 100, 365] {
+        let targets = vec![EPOCH + days as f64];
+        group.bench_with_input(
+            BenchmarkId::new("days", days),
+            &targets,
+            |b, targets| {
+                b.iter(|| {
+                    assist_rs::assist_propagate(
+                        &ephem,
+                        &CERES_STATE,
+                        EPOCH,
+                        targets,
+                        false,
+                        None,
+                    )
+                    .unwrap()
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Criterion harness
+// ---------------------------------------------------------------------------
+
+criterion_group!(
+    benches,
+    bench_propagate_single,
+    bench_propagate_with_stm,
+    bench_propagate_with_nongrav,
+    bench_rust_vs_raw_c,
+    bench_parallel_propagation,
+    bench_duration_scaling,
+);
+criterion_main!(benches);
