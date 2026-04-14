@@ -115,6 +115,7 @@ fn test_propagate_ceres() {
         epoch,
         &target,
         false,
+        None,
     ).unwrap();
 
     assert_eq!(results.len(), 1);
@@ -165,6 +166,7 @@ fn test_propagate_with_stm() {
         epoch,
         &target,
         true,
+        None,
     ).unwrap();
 
     assert_eq!(results.len(), 1);
@@ -236,6 +238,7 @@ fn test_generate_ephemeris() {
         &orbit_state,
         orbit_epoch,
         &[observer],
+        None,
     ).unwrap();
 
     assert_eq!(results.len(), 1);
@@ -248,14 +251,14 @@ fn test_generate_ephemeris() {
         "Geocentric range to Ceres: {rho} AU"
     );
 
-    // RA should be in [0, 2pi)
+    // RA should be in [0, 2π)
     let ra = eph.spherical[1];
     assert!(
         ra >= 0.0 && ra < std::f64::consts::TAU,
         "RA out of range: {ra} rad"
     );
 
-    // Dec should be in [-pi/2, pi/2]
+    // Dec should be in [-π/2, π/2]
     let dec = eph.spherical[2];
     assert!(
         dec >= -std::f64::consts::FRAC_PI_2 && dec <= std::f64::consts::FRAC_PI_2,
@@ -270,8 +273,73 @@ fn test_generate_ephemeris() {
     );
 
     eprintln!("Ceres from geocenter at MJD 60010:");
-    eprintln!("  rho={rho:.4} AU, RA={:.4} deg, Dec={:.4} deg",
+    eprintln!("  rho={rho:.4} AU, RA={:.4}°, Dec={:.4}°",
         ra.to_degrees(), dec.to_degrees());
     eprintln!("  light_time={:.6} days ({:.1} min)",
         eph.light_time, eph.light_time * 24.0 * 60.0);
+}
+
+#[test]
+fn test_propagate_with_non_grav() {
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+
+    // Use Ceres state at MJD 60000
+    let ceres_state = [
+        -1.938_169_72,
+         2.289_213_79,
+         1.094_048_30,
+        -0.008_744_54,
+        -0.005_523_16,
+         0.001_174_22,
+    ];
+    let epoch = 60000.0;
+    let target = [epoch + 30.0];
+
+    // Propagate without non-grav forces (baseline)
+    let baseline = assist_rs::assist_propagate(
+        &ephem,
+        &ceres_state,
+        epoch,
+        &target,
+        false,
+        None,
+    ).unwrap();
+
+    // Propagate with a small transverse non-grav acceleration (A2)
+    // A2 = 1e-10 AU/day² is a typical cometary value
+    let ng = assist_rs::NonGravParams::new(0.0, 1e-10, 0.0);
+    let with_ng = assist_rs::assist_propagate(
+        &ephem,
+        &ceres_state,
+        epoch,
+        &target,
+        false,
+        Some(&ng),
+    ).unwrap();
+
+    // The states should differ — non-grav acceleration changes the orbit
+    let dx: f64 = (0..6)
+        .map(|i| (baseline[0].state[i] - with_ng[0].state[i]).powi(2))
+        .sum::<f64>()
+        .sqrt();
+
+    assert!(
+        dx > 1e-15,
+        "Non-grav force had no effect: state difference = {dx}"
+    );
+
+    // But the difference should be small for this weak force over 30 days
+    let pos_diff = ((baseline[0].state[0] - with_ng[0].state[0]).powi(2)
+        + (baseline[0].state[1] - with_ng[0].state[1]).powi(2)
+        + (baseline[0].state[2] - with_ng[0].state[2]).powi(2))
+    .sqrt();
+    assert!(
+        pos_diff < 0.01,
+        "Non-grav position difference too large: {pos_diff} AU"
+    );
+
+    eprintln!("Non-grav effect over 30 days: pos_diff={pos_diff:.2e} AU, state_diff={dx:.2e}");
 }

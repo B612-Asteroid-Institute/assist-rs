@@ -3,7 +3,7 @@
 
 use crate::coordinates::{cartesian_to_spherical, ecliptic_to_equatorial};
 use crate::ffi;
-use crate::propagate::assist_propagate;
+use crate::propagate::{assist_propagate, NonGravParams};
 use crate::wrappers::Ephemeris;
 use crate::Result;
 
@@ -49,6 +49,7 @@ pub fn assist_generate_ephemeris(
     orbit_state: &[f64; 6],
     orbit_epoch: f64,
     observers: &[Observer],
+    non_grav: Option<&NonGravParams>,
 ) -> Result<Vec<EphemerisResult>> {
     if observers.is_empty() {
         return Ok(vec![]);
@@ -65,6 +66,7 @@ pub fn assist_generate_ephemeris(
             orbit_epoch,
             obs,
             c,
+            non_grav,
         )?;
         results.push(result);
     }
@@ -79,11 +81,12 @@ fn compute_single_ephemeris(
     orbit_epoch: f64,
     obs: &Observer,
     c: f64,
+    non_grav: Option<&NonGravParams>,
 ) -> Result<EphemerisResult> {
     let t_obs = obs.epoch;
 
     // Step 1: Propagate to observation epoch for initial distance estimate
-    let states = assist_propagate(ephem, orbit_state, orbit_epoch, &[t_obs], false)?;
+    let states = assist_propagate(ephem, orbit_state, orbit_epoch, &[t_obs], false, non_grav)?;
     let helio_ecl_obs = states[0].state;
 
     // Initial light-time estimate
@@ -105,7 +108,7 @@ fn compute_single_ephemeris(
 
     for _ in 0..MAX_ITER {
         let t_emit = t_obs - tau;
-        let emit_states = assist_propagate(ephem, orbit_state, orbit_epoch, &[t_emit], false)?;
+        let emit_states = assist_propagate(ephem, orbit_state, orbit_epoch, &[t_emit], false, non_grav)?;
         aberrated_state = emit_states[0].state;
 
         let dx_new = [

@@ -239,6 +239,57 @@ impl AssistSim {
         &mut self.sim
     }
 
+    // --- Non-gravitational force model parameters ---
+
+    /// Set the g(r) model exponent α. Default: 1.0.
+    pub fn set_alpha(&mut self, v: f64) {
+        unsafe { ffi::assist_rs_extras_set_alpha(self.ax, v) }
+    }
+    pub fn alpha(&self) -> f64 {
+        unsafe { ffi::assist_rs_extras_get_alpha(self.ax) }
+    }
+
+    /// Set the g(r) model exponent k. Default: 0.0 (pure inverse-power law).
+    pub fn set_nk(&mut self, v: f64) {
+        unsafe { ffi::assist_rs_extras_set_nk(self.ax, v) }
+    }
+    pub fn nk(&self) -> f64 {
+        unsafe { ffi::assist_rs_extras_get_nk(self.ax) }
+    }
+
+    /// Set the g(r) model exponent m. Default: 2.0 (inverse-square).
+    pub fn set_nm(&mut self, v: f64) {
+        unsafe { ffi::assist_rs_extras_set_nm(self.ax, v) }
+    }
+    pub fn nm(&self) -> f64 {
+        unsafe { ffi::assist_rs_extras_get_nm(self.ax) }
+    }
+
+    /// Set the g(r) model exponent n. Default: 5.093 (Marsden-Sekanina water ice).
+    pub fn set_nn(&mut self, v: f64) {
+        unsafe { ffi::assist_rs_extras_set_nn(self.ax, v) }
+    }
+    pub fn nn(&self) -> f64 {
+        unsafe { ffi::assist_rs_extras_get_nn(self.ax) }
+    }
+
+    /// Set the g(r) model scale distance r₀ in AU. Default: 1.0.
+    pub fn set_r0(&mut self, v: f64) {
+        unsafe { ffi::assist_rs_extras_set_r0(self.ax, v) }
+    }
+    pub fn r0(&self) -> f64 {
+        unsafe { ffi::assist_rs_extras_get_r0(self.ax) }
+    }
+
+    /// Set the particle_params pointer (flat array, 3 doubles per particle: [A1, A2, A3]).
+    ///
+    /// # Safety
+    /// The caller must ensure the pointer remains valid for the lifetime of the simulation
+    /// and has at least `3 * n_particles` elements (including variational particles).
+    pub(crate) unsafe fn set_particle_params(&mut self, ptr: *mut f64) {
+        unsafe { ffi::assist_rs_extras_set_particle_params(self.ax, ptr) }
+    }
+
     /// Integrate to target time.
     pub fn integrate(&mut self, tmax: f64) -> Result<()> {
         self.sim.integrate(tmax)

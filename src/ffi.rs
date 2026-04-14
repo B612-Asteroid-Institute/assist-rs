@@ -222,6 +222,18 @@ unsafe extern "C" {
     pub fn assist_rs_extras_get_particle_params(ax: *const assist_extras) -> *mut c_double;
     pub fn assist_rs_extras_set_particle_params(ax: *mut assist_extras, p: *mut c_double);
 
+    // Non-gravitational force model parameters
+    pub fn assist_rs_extras_get_alpha(ax: *const assist_extras) -> c_double;
+    pub fn assist_rs_extras_set_alpha(ax: *mut assist_extras, v: c_double);
+    pub fn assist_rs_extras_get_nk(ax: *const assist_extras) -> c_double;
+    pub fn assist_rs_extras_set_nk(ax: *mut assist_extras, v: c_double);
+    pub fn assist_rs_extras_get_nm(ax: *const assist_extras) -> c_double;
+    pub fn assist_rs_extras_set_nm(ax: *mut assist_extras, v: c_double);
+    pub fn assist_rs_extras_get_nn(ax: *const assist_extras) -> c_double;
+    pub fn assist_rs_extras_set_nn(ax: *mut assist_extras, v: c_double);
+    pub fn assist_rs_extras_get_r0(ax: *const assist_extras) -> c_double;
+    pub fn assist_rs_extras_set_r0(ax: *mut assist_extras, v: c_double);
+
     // assist_ephem field accessors
     pub fn assist_rs_ephem_get_jd_ref(ephem: *const assist_ephem) -> c_double;
     pub fn assist_rs_ephem_set_jd_ref(ephem: *mut assist_ephem, jd: c_double);

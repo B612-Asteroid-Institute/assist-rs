@@ -20,7 +20,7 @@ pub mod ephemeris;
 mod observatory;
 pub mod coordinates;
 
-pub use propagate::{assist_propagate, PropagatedState};
+pub use propagate::{assist_propagate, NonGravParams, PropagatedState};
 pub use state::{assist_get_state, BodyState, Target};
 pub use ephemeris::{assist_generate_ephemeris, EphemerisResult, Observer};
 pub use observatory::ObservatoryTable;

@@ -5,6 +5,55 @@ use crate::ffi;
 use crate::wrappers::{AssistSim, Ephemeris, Simulation};
 use crate::{Error, Result};
 
+/// Marsden-Sekanina non-gravitational force parameters.
+///
+/// The non-gravitational acceleration uses the RTN (radial/transverse/normal)
+/// decomposition with a g(r) model:
+///
+/// ```text
+/// a_ng = g(r) * (A1·r̂ + A2·t̂ + A3·n̂)
+/// g(r) = α * (r/r₀)^(-m) * (1 + (r/r₀)^n)^(-k)
+/// ```
+///
+/// Default model parameters (α=1, m=2, n=5.093, k=0, r₀=1 AU) give
+/// g(r) = r⁻² — a pure inverse-square law. The Marsden-Sekanina water ice
+/// sublimation model uses α=0.111262, m=2.15, n=5.093, k=4.6142, r₀=2.808 AU.
+#[derive(Debug, Clone)]
+pub struct NonGravParams {
+    /// Radial non-grav coefficient A1 (AU/day²).
+    pub a1: f64,
+    /// Transverse non-grav coefficient A2 (AU/day²).
+    pub a2: f64,
+    /// Normal non-grav coefficient A3 (AU/day²).
+    pub a3: f64,
+    /// g(r) normalization. Default: 1.0.
+    pub alpha: Option<f64>,
+    /// g(r) exponent k. Default: 0.0.
+    pub nk: Option<f64>,
+    /// g(r) exponent m. Default: 2.0.
+    pub nm: Option<f64>,
+    /// g(r) exponent n. Default: 5.093.
+    pub nn: Option<f64>,
+    /// g(r) scale distance in AU. Default: 1.0.
+    pub r0: Option<f64>,
+}
+
+impl NonGravParams {
+    /// Create non-grav params with the default g(r) = r⁻² model.
+    pub fn new(a1: f64, a2: f64, a3: f64) -> Self {
+        Self {
+            a1,
+            a2,
+            a3,
+            alpha: None,
+            nk: None,
+            nm: None,
+            nn: None,
+            r0: None,
+        }
+    }
+}
+
 /// Result of propagating to a single epoch.
 #[derive(Debug, Clone)]
 pub struct PropagatedState {
@@ -12,7 +61,7 @@ pub struct PropagatedState {
     pub state: [f64; 6],
     /// Epoch (MJD TDB).
     pub epoch: f64,
-    /// 6x6 state transition matrix Phi(t, t0), row-major.
+    /// 6×6 state transition matrix Φ(t, t₀), row-major.
     /// Maps initial state perturbations to propagated state perturbations.
     /// Only populated when `compute_stm` is true.
     pub stm: Option<[[f64; 6]; 6]>,
@@ -35,6 +84,7 @@ pub fn assist_propagate(
     epoch: f64,
     target_epochs: &[f64],
     compute_stm: bool,
+    non_grav: Option<&NonGravParams>,
 ) -> Result<Vec<PropagatedState>> {
     if target_epochs.is_empty() {
         return Ok(vec![]);
@@ -43,7 +93,7 @@ pub fn assist_propagate(
     let jd_ref = ephem.jd_ref();
     let t0 = mjd_to_assist_time(epoch, jd_ref);
 
-    // Convert heliocentric ecliptic -> barycentric equatorial ICRF
+    // Convert heliocentric ecliptic → barycentric equatorial ICRF
     let eq_state = ecliptic_to_equatorial(state);
     let sun = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t0)?;
     let bary_state = [
@@ -59,13 +109,30 @@ pub fn assist_propagate(
     let mut sim = Simulation::new()?;
     sim.set_t(t0);
     let mut asim = AssistSim::new(sim, ephem)?;
-    asim.set_forces(ffi::ASSIST_FORCES_DEFAULT);
+
+    // Set force model: default + non-gravitational if requested
+    let mut forces = ffi::ASSIST_FORCES_DEFAULT;
+    if non_grav.is_some() {
+        forces |= ffi::ASSIST_FORCE_NON_GRAVITATIONAL;
+    }
+    asim.set_forces(forces);
 
     // Add test particle (index 0)
     asim.sim_mut().add_test_particle(
         bary_state[0], bary_state[1], bary_state[2],
         bary_state[3], bary_state[4], bary_state[5],
     );
+
+    // Set non-gravitational model parameters if provided.
+    // particle_params is allocated after variational particles are added
+    // (since the array must cover N_real + N_var particles).
+    if let Some(ng) = non_grav {
+        if let Some(v) = ng.alpha { asim.set_alpha(v); }
+        if let Some(v) = ng.nk { asim.set_nk(v); }
+        if let Some(v) = ng.nm { asim.set_nm(v); }
+        if let Some(v) = ng.nn { asim.set_nn(v); }
+        if let Some(v) = ng.r0 { asim.set_r0(v); }
+    }
 
     // Add variational particles if STM requested
     let var_start_idx = if compute_stm {
@@ -98,7 +165,7 @@ pub fn assist_propagate(
         //
         // REBOUND variational particles start at index N_real (after the test particle).
         // For 1 test particle, N_real = 1. After adding 6 variation sets,
-        // we have particles at indices 1..6, each representing dx/dx0_d.
+        // we have particles at indices 1..6, each representing ∂x/∂x₀_d.
         //
         // We need to initialize each variational particle with a unit
         // perturbation in one phase-space dimension.
@@ -129,6 +196,27 @@ pub fn assist_propagate(
         -1
     };
 
+    // Allocate particle_params for non-gravitational forces.
+    // Must be done after variational particles are added since the array
+    // covers all particles: 3 doubles per particle (real + variational).
+    // The array is: [A1_0, A2_0, A3_0, ..., dA1_var0, dA2_var0, dA3_var0, ...]
+    let mut _particle_params_storage;
+    if let Some(ng) = non_grav {
+        let n_total = asim.sim().n_particles(); // real + variational
+        _particle_params_storage = vec![0.0f64; 3 * n_total];
+        // Set A1, A2, A3 for the test particle (index 0)
+        _particle_params_storage[0] = ng.a1;
+        _particle_params_storage[1] = ng.a2;
+        _particle_params_storage[2] = ng.a3;
+        // Variational particle params remain 0 — ASSIST reads dA1/dA2/dA3
+        // from particle_params[3*(N_real+v)+{0,1,2}]. Zero means the STM
+        // does not include derivatives w.r.t. A1/A2/A3 (which is correct
+        // for state-only variational equations).
+        unsafe {
+            asim.set_particle_params(_particle_params_storage.as_mut_ptr());
+        }
+    }
+
     // Integrate to each target epoch sequentially (they should be sorted)
     let mut results = Vec::with_capacity(target_epochs.len());
 
@@ -144,7 +232,7 @@ pub fn assist_propagate(
         let p = &particles[0];
         let bary_eq = [p.x, p.y, p.z, p.vx, p.vy, p.vz];
 
-        // Convert barycentric equatorial -> heliocentric ecliptic
+        // Convert barycentric equatorial → heliocentric ecliptic
         let sun_t = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t_target)?;
         let helio_eq = [
             bary_eq[0] - sun_t.x,
@@ -173,7 +261,7 @@ pub fn assist_propagate(
                     stm[5][d] = vp.vz;
                 }
             }
-            // Rotate STM from equatorial to ecliptic: R x STM_eq x R^T
+            // Rotate STM from equatorial to ecliptic: R × STM_eq × R^T
             Some(rotate_matrix_eq_to_ecl(&stm))
         } else {
             None

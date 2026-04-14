@@ -10,7 +10,7 @@ Three high-level functions, all operating in **heliocentric ecliptic J2000** coo
 
 ### `assist_propagate`
 
-N-body propagation of a test particle with optional state transition matrix (STM) via variational equations.
+N-body propagation of a test particle with optional state transition matrix (STM) via variational equations, and optional non-gravitational forces.
 
 ```rust
 let results = assist_propagate(
@@ -19,6 +19,7 @@ let results = assist_propagate(
     epoch_mjd,                 // initial epoch
     &[t1, t2, t3],            // target epochs (sorted)
     true,                      // compute STM
+    None,                      // non-gravitational params (or Some(&ng))
 )?;
 // results[i].state  -> [f64; 6]
 // results[i].stm    -> Option<[[f64; 6]; 6]>
@@ -44,10 +45,37 @@ let results = assist_generate_ephemeris(
     &orbit_state,
     orbit_epoch,
     &[Observer { state: obs_state, epoch: obs_epoch }],
+    None,  // non-gravitational params
 )?;
 // results[i].spherical      -> [rho, ra, dec, drho, dra, ddec]
 // results[i].aberrated_state -> [f64; 6] light-time-corrected heliocentric
 // results[i].light_time      -> f64 (days)
+```
+
+### `NonGravParams`
+
+Marsden-Sekanina non-gravitational force model with configurable g(r):
+
+```text
+a_ng = g(r) * (A1*r_hat + A2*t_hat + A3*n_hat)
+g(r) = alpha * (r/r0)^(-m) * (1 + (r/r0)^n)^(-k)
+```
+
+```rust
+// Default model: g(r) = r^-2 (inverse-square law)
+let ng = NonGravParams::new(0.0, 1e-10, 0.0);  // A1, A2, A3
+
+// Custom model (e.g. Marsden-Sekanina water ice sublimation)
+let ng = NonGravParams {
+    a1: 0.0, a2: 1e-10, a3: 0.0,
+    alpha: Some(0.111262),
+    nm: Some(2.15),
+    nn: Some(5.093),
+    nk: Some(4.6142),
+    r0: Some(2.808),
+};
+
+let results = assist_propagate(&ephem, &state, epoch, &targets, false, Some(&ng))?;
 ```
 
 ## Setup

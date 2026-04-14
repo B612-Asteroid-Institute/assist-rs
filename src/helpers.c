@@ -81,3 +81,20 @@ double assist_rs_ephem_get_c_au_per_day(const struct assist_ephem* ephem) { retu
 double assist_rs_ephem_get_re(const struct assist_ephem* ephem) { return ephem->RE; }
 double assist_rs_ephem_get_re_eq(const struct assist_ephem* ephem) { return ephem->Re_eq; }
 double assist_rs_ephem_get_emrat(const struct assist_ephem* ephem) { return ephem->EMRAT; }
+
+// --- assist_extras non-gravitational force parameters ---
+
+double assist_rs_extras_get_alpha(const struct assist_extras* ax) { return ax->alpha; }
+void   assist_rs_extras_set_alpha(struct assist_extras* ax, double v) { ax->alpha = v; }
+
+double assist_rs_extras_get_nk(const struct assist_extras* ax) { return ax->nk; }
+void   assist_rs_extras_set_nk(struct assist_extras* ax, double v) { ax->nk = v; }
+
+double assist_rs_extras_get_nm(const struct assist_extras* ax) { return ax->nm; }
+void   assist_rs_extras_set_nm(struct assist_extras* ax, double v) { ax->nm = v; }
+
+double assist_rs_extras_get_nn(const struct assist_extras* ax) { return ax->nn; }
+void   assist_rs_extras_set_nn(struct assist_extras* ax, double v) { ax->nn = v; }
+
+double assist_rs_extras_get_r0(const struct assist_extras* ax) { return ax->r0; }
+void   assist_rs_extras_set_r0(struct assist_extras* ax, double v) { ax->r0 = v; }
