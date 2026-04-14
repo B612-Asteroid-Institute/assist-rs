@@ -64,7 +64,7 @@ def mjd_to_assist_time(mjd_tdb, jd_ref):
     return (mjd_tdb + 2400000.5) - jd_ref
 
 
-def propagate_orbit(ephem, state_ecl, epoch_mjd, target_mjds):
+def propagate_orbit(ephem, state_ecl, epoch_mjd, target_mjds, non_grav=None):
     """Propagate a single orbit using REBOUND + ASSIST.
 
     Matches the exact setup in assist-rs::assist_propagate:
@@ -83,6 +83,10 @@ def propagate_orbit(ephem, state_ecl, epoch_mjd, target_mjds):
         Initial epoch in MJD TDB.
     target_mjds : list[float]
         Target epochs in MJD TDB (must be sorted).
+    non_grav : tuple[float, float, float] | None
+        Optional (A1, A2, A3) non-gravitational acceleration components
+        (Marsden-Sekanina model). When provided, the NON_GRAVITATIONAL
+        force flag is enabled and particle_params is set.
 
     Returns
     -------
@@ -110,6 +114,10 @@ def propagate_orbit(ephem, state_ecl, epoch_mjd, target_mjds):
     sim = rebound.Simulation()
     sim.t = t0
     extras = assist.Extras(sim, ephem)
+
+    if non_grav is not None:
+        extras.forces = extras.forces + ["NON_GRAVITATIONAL"]
+        extras.particle_params = np.array(list(non_grav), dtype=np.float64)
 
     # Add test particle
     sim.add(
@@ -211,6 +219,11 @@ def main():
     dt_days = 30.0
     n_epochs = 10
 
+    # Non-gravitational acceleration parameters for the non-grav test suite.
+    # Comet-like transverse drag (A2 ≠ 0) — arbitrary but numerically exercises
+    # the NON_GRAVITATIONAL force path in ASSIST.
+    nongrav_params = (0.0, 1e-10, 0.0)
+
     reference_data = {
         "metadata": {
             "rebound_version": rebound.__version__,
@@ -220,10 +233,14 @@ def main():
             "sin_eps": SIN_EPS,
             "propagation_days": dt_days,
             "n_epochs": n_epochs,
+            "nongrav_params": list(nongrav_params),
         },
         "orbits": [],
+        "nongrav_orbits": [],
     }
 
+    # ── Gravity-only pass ────────────────────────────────────────────────
+    print("Gravity-only propagation:")
     for i, orbit in enumerate(orbits):
         epoch = orbit["epoch_mjd"]
 
@@ -258,11 +275,47 @@ def main():
         reference_data["orbits"].append(entry)
         print(f"  [{i+1}/{len(orbits)}] {orbit['object_id']}: {len(results)} epochs OK")
 
+    # ── Non-gravitational pass ───────────────────────────────────────────
+    print(f"\nNon-gravitational propagation (A1, A2, A3) = {nongrav_params}:")
+    for i, orbit in enumerate(orbits):
+        epoch = orbit["epoch_mjd"]
+        t0 = mjd_to_assist_time(epoch, ephem.jd_ref)
+        t_end = mjd_to_assist_time(epoch + dt_days, ephem.jd_ref)
+
+        try:
+            ephem.get_particle("sun", t0)
+            ephem.get_particle("sun", t_end)
+        except Exception as e:
+            print(f"  Skipping {orbit['object_id']}: epoch outside ephemeris range ({e})")
+            continue
+
+        target_epochs = [epoch + dt_days * (j + 1) / n_epochs for j in range(n_epochs)]
+
+        try:
+            results = propagate_orbit(
+                ephem, orbit["state"], epoch, target_epochs, non_grav=nongrav_params
+            )
+        except Exception as e:
+            print(f"  Skipping {orbit['object_id']}: propagation failed ({e})")
+            continue
+
+        entry = {
+            "object_id": orbit["object_id"],
+            "epoch_mjd": epoch,
+            "initial_state": orbit["state"],
+            "propagated": results,
+        }
+        reference_data["nongrav_orbits"].append(entry)
+        print(f"  [{i+1}/{len(orbits)}] {orbit['object_id']}: {len(results)} epochs OK")
+
     output_path = os.path.join(os.path.dirname(__file__), "reference_data.json")
     with open(output_path, "w") as f:
         json.dump(reference_data, f, indent=2)
 
-    print(f"\nWrote {len(reference_data['orbits'])} orbits to {output_path}")
+    print(
+        f"\nWrote {len(reference_data['orbits'])} gravity-only orbits and "
+        f"{len(reference_data['nongrav_orbits'])} non-grav orbits to {output_path}"
+    )
 
 
 if __name__ == "__main__":

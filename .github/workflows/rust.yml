@@ -52,7 +52,7 @@ jobs:
         run: cargo test --verbose -- --test-threads=1
 
       - name: Install ephemeris data packages
-        run: pip install naif-de440 jpl-small-bodies-de441-n16
+        run: pip install --timeout 600 --retries 5 naif-de440 jpl-small-bodies-de441-n16
 
       - name: Resolve ephemeris paths
         run: |
@@ -83,7 +83,7 @@ jobs:
           rustflags: ""
 
       - name: Install ephemeris data packages
-        run: pip install naif-de440 jpl-small-bodies-de441-n16
+        run: pip install --timeout 600 --retries 5 naif-de440 jpl-small-bodies-de441-n16
 
       - name: Resolve ephemeris paths
         run: |

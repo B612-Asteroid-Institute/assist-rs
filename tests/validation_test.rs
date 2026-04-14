@@ -21,6 +21,8 @@ use rayon::prelude::*;
 struct ReferenceData {
     metadata: Metadata,
     orbits: Vec<OrbitEntry>,
+    #[serde(default)]
+    nongrav_orbits: Vec<OrbitEntry>,
 }
 
 #[derive(serde::Deserialize)]
@@ -35,6 +37,10 @@ struct Metadata {
     cos_eps: f64,
     #[allow(dead_code)]
     sin_eps: f64,
+    /// Non-gravitational parameters [A1, A2, A3] used for `nongrav_orbits`.
+    /// Optional for backward compatibility with older reference files.
+    #[serde(default)]
+    nongrav_params: Option<[f64; 3]>,
 }
 
 #[derive(serde::Deserialize, Clone)]
@@ -70,8 +76,19 @@ fn load_reference_data() -> Option<ReferenceData> {
 
 /// Propagate a single orbit and compare against reference.
 /// Returns (object_id, max_position_error_au, max_velocity_error).
-fn validate_orbit(ephem: &assist_rs::Ephemeris, entry: &OrbitEntry) -> (String, f64, f64) {
-    let orbit = assist_rs::Orbit::new(entry.initial_state, entry.epoch_mjd);
+fn validate_orbit(
+    ephem: &assist_rs::Ephemeris,
+    entry: &OrbitEntry,
+    non_grav: Option<[f64; 3]>,
+) -> (String, f64, f64) {
+    let orbit = match non_grav {
+        Some([a1, a2, a3]) => assist_rs::Orbit::with_non_grav(
+            entry.initial_state,
+            entry.epoch_mjd,
+            assist_rs::NonGravParams::new(a1, a2, a3),
+        ),
+        None => assist_rs::Orbit::new(entry.initial_state, entry.epoch_mjd),
+    };
     let target_epochs: Vec<f64> = entry.propagated.iter().map(|p| p.epoch).collect();
 
     let results = assist_rs::assist_propagate(ephem, &orbit, &target_epochs, false)
@@ -107,6 +124,74 @@ fn validate_orbit(ephem: &assist_rs::Ephemeris, entry: &OrbitEntry) -> (String, 
     (entry.object_id.clone(), max_pos_err, max_vel_err)
 }
 
+/// Run a batch of orbits through validation and assert the aggregate
+/// errors stay under the tolerance. Prints a summary, fails loudly on
+/// out-of-tolerance entries.
+fn run_validation_batch(
+    label: &str,
+    ephem: &assist_rs::Ephemeris,
+    entries: &[OrbitEntry],
+    non_grav: Option<[f64; 3]>,
+) {
+    // Tolerance: since we use ASSIST 1.2.0 and the reference uses 1.1.9a2,
+    // there may be small differences from C library changes.
+    // Position tolerance: 1e-10 AU ≈ 15 meters
+    // Velocity tolerance: 1e-12 AU/day ≈ 0.002 mm/s
+    //
+    // If both sides use the exact same ASSIST version, these should be
+    // bit-identical (< 1e-15). With version differences, we allow a
+    // generous tolerance.
+    let pos_tol_au = 1e-10;
+    let vel_tol_au_day = 1e-12;
+
+    let results: Vec<(String, f64, f64)> = entries
+        .par_iter()
+        .map(|entry| validate_orbit(ephem, entry, non_grav))
+        .collect();
+
+    let mut n_pass = 0;
+    let mut n_fail = 0;
+    let mut worst_pos_err = 0.0f64;
+    let mut worst_vel_err = 0.0f64;
+    let mut worst_pos_name = String::new();
+    let mut worst_vel_name = String::new();
+
+    for (name, pos_err, vel_err) in &results {
+        if *pos_err > worst_pos_err {
+            worst_pos_name = name.clone();
+            worst_pos_err = *pos_err;
+        }
+        if *vel_err > worst_vel_err {
+            worst_vel_name = name.clone();
+            worst_vel_err = *vel_err;
+        }
+
+        let pos_ok = *pos_err < pos_tol_au;
+        let vel_ok = *vel_err < vel_tol_au_day;
+
+        if pos_ok && vel_ok {
+            n_pass += 1;
+        } else {
+            n_fail += 1;
+            eprintln!(
+                "FAIL [{label}]: {name}: pos_err={pos_err:.2e} AU, vel_err={vel_err:.2e} AU/day"
+            );
+        }
+    }
+
+    eprintln!("\n--- Validation Summary [{label}] ---");
+    eprintln!("Orbits tested: {}", results.len());
+    eprintln!("Passed: {n_pass}, Failed: {n_fail}");
+    eprintln!("Worst position error: {worst_pos_err:.2e} AU ({worst_pos_name})");
+    eprintln!("Worst velocity error: {worst_vel_err:.2e} AU/day ({worst_vel_name})");
+    eprintln!("Tolerances: pos < {pos_tol_au:.0e} AU, vel < {vel_tol_au_day:.0e} AU/day");
+
+    assert_eq!(
+        n_fail, 0,
+        "[{label}] {n_fail} orbits exceeded tolerance (worst pos: {worst_pos_err:.2e} AU, worst vel: {worst_vel_err:.2e} AU/day)"
+    );
+}
+
 #[test]
 fn test_validation_against_python() {
     let Some((planets, asteroids)) = ephem_paths() else {
@@ -136,65 +221,47 @@ fn test_validation_against_python() {
 
     // Propagate all orbits in parallel using rayon.
     // Ephemeris is Send+Sync — each thread creates its own Simulation.
-    let results: Vec<(String, f64, f64)> = reference
-        .orbits
-        .par_iter()
-        .map(|orbit| validate_orbit(&ephem, orbit))
-        .collect();
+    run_validation_batch("gravity", &ephem, &reference.orbits, None);
+}
 
-    // Tolerance: since we use ASSIST 1.2.0 and the reference uses 1.1.9a2,
-    // there may be small differences from C library changes.
-    // Position tolerance: 1e-10 AU ≈ 15 meters
-    // Velocity tolerance: 1e-12 AU/day ≈ 0.002 mm/s
-    //
-    // If both sides use the exact same ASSIST version, these should be
-    // bit-identical (< 1e-15). With version differences, we allow a
-    // generous tolerance.
-    let pos_tol_au = 1e-10;
-    let vel_tol_au_day = 1e-12;
+#[test]
+fn test_nongrav_validation_against_python() {
+    let Some((planets, asteroids)) = ephem_paths() else {
+        eprintln!("Skipping: ASSIST_PLANETS_PATH / ASSIST_ASTEROIDS_PATH not set");
+        return;
+    };
 
-    let mut n_pass = 0;
-    let mut n_fail = 0;
-    let mut worst_pos_err = 0.0f64;
-    let mut worst_vel_err = 0.0f64;
-    let mut worst_pos_name = String::new();
-    let mut worst_vel_name = String::new();
+    let Some(reference) = load_reference_data() else {
+        eprintln!("Skipping: validation/reference_data.json not found");
+        return;
+    };
 
-    for (name, pos_err, vel_err) in &results {
-        worst_pos_err = if *pos_err > worst_pos_err {
-            worst_pos_name = name.clone();
-            *pos_err
-        } else {
-            worst_pos_err
-        };
-        worst_vel_err = if *vel_err > worst_vel_err {
-            worst_vel_name = name.clone();
-            *vel_err
-        } else {
-            worst_vel_err
-        };
-
-        let pos_ok = *pos_err < pos_tol_au;
-        let vel_ok = *vel_err < vel_tol_au_day;
-
-        if pos_ok && vel_ok {
-            n_pass += 1;
-        } else {
-            n_fail += 1;
-            eprintln!("FAIL: {name}: pos_err={pos_err:.2e} AU, vel_err={vel_err:.2e} AU/day");
-        }
+    if reference.nongrav_orbits.is_empty() {
+        eprintln!("Skipping: reference_data.json has no nongrav_orbits section");
+        eprintln!("Regenerate it with: python validation/generate_reference.py");
+        return;
     }
 
-    eprintln!("\n--- Validation Summary ---");
-    eprintln!("Orbits tested: {}", results.len());
-    eprintln!("Passed: {n_pass}, Failed: {n_fail}");
-    eprintln!("Worst position error: {worst_pos_err:.2e} AU ({worst_pos_name})");
-    eprintln!("Worst velocity error: {worst_vel_err:.2e} AU/day ({worst_vel_name})");
-    eprintln!("Tolerances: pos < {pos_tol_au:.0e} AU, vel < {vel_tol_au_day:.0e} AU/day");
+    let Some(nongrav) = reference.metadata.nongrav_params else {
+        panic!("nongrav_orbits present but metadata.nongrav_params missing");
+    };
 
-    assert_eq!(
-        n_fail, 0,
-        "{n_fail} orbits exceeded tolerance (worst pos: {worst_pos_err:.2e} AU, worst vel: {worst_vel_err:.2e} AU/day)"
+    eprintln!(
+        "Non-grav reference data: {} orbits with (A1, A2, A3) = ({:.2e}, {:.2e}, {:.2e})",
+        reference.nongrav_orbits.len(),
+        nongrav[0],
+        nongrav[1],
+        nongrav[2],
+    );
+
+    let ephem =
+        assist_rs::Ephemeris::from_paths(&planets, &asteroids).expect("Failed to load ephemeris");
+
+    run_validation_batch(
+        "non-gravitational",
+        &ephem,
+        &reference.nongrav_orbits,
+        Some(nongrav),
     );
 }
 
