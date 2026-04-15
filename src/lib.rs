@@ -17,6 +17,7 @@ pub use wrappers::{AssistSim, Ephemeris, Simulation};
 pub mod coordinates;
 #[cfg(feature = "data")]
 pub mod data;
+pub mod earth_orientation;
 pub mod ephemeris;
 mod observatory;
 mod orbit;

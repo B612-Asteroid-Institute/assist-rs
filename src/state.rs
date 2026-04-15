@@ -114,25 +114,55 @@ fn compute_observatory_state(
         return Ok(equatorial_to_ecliptic(&helio_eq));
     }
 
-    // Compute observatory ECEF position from parallax coefficients
+    // Body-fixed (ITRF93) position of the observatory, AU.
     let earth_radius_au = ephem.earth_radius_au();
     let lon_rad = entry.longitude_deg.to_radians();
+    let (sin_lon, cos_lon) = lon_rad.sin_cos();
+    let bf_x = earth_radius_au * entry.cos_lat * cos_lon;
+    let bf_y = earth_radius_au * entry.cos_lat * sin_lon;
+    let bf_z = earth_radius_au * entry.sin_lat;
+
+    // Rotate ITRF93 → ICRF/J2000 equatorial.
     let jd = t + ephem.jd_ref();
-    let mjd = jd - 2_400_000.5;
-    let gmst = compute_gmst(mjd);
-    let theta = gmst + lon_rad; // local sidereal angle
-
-    // Position in equatorial frame (AU, relative to Earth center)
-    let (sin_theta, cos_theta) = theta.sin_cos();
-    let obs_x = earth_radius_au * entry.cos_lat * cos_theta;
-    let obs_y = earth_radius_au * entry.cos_lat * sin_theta;
-    let obs_z = earth_radius_au * entry.sin_lat;
-
-    // Velocity from Earth rotation (ω_earth ≈ 7.2921150e-5 rad/s = 6.30038809866574 rad/day)
-    const OMEGA_EARTH: f64 = 6.300_388_098_665_74; // rad/day
-    let obs_vx = -OMEGA_EARTH * obs_y;
-    let obs_vy = OMEGA_EARTH * obs_x;
-    let obs_vz = 0.0;
+    let mjd_tdb = jd - 2_400_000.5;
+    let (obs_x, obs_y, obs_z, obs_vx, obs_vy, obs_vz) =
+        if let Some(eo) = obs_table.earth_orientation() {
+            // ET avoids the precision loss of an MJD round-trip inside the
+            // rotation lookup.
+            let et = (jd - 2_451_545.0) * 86_400.0;
+            let r = eo
+                .rotation_itrf_to_j2000_et(et)
+                .map_err(|e| Error::Other(format!("earth orientation lookup: {e}")))?;
+            // Position: v_icrf = R · v_itrf
+            let x = r[0][0] * bf_x + r[0][1] * bf_y + r[0][2] * bf_z;
+            let y = r[1][0] * bf_x + r[1][1] * bf_y + r[1][2] * bf_z;
+            let z = r[2][0] * bf_x + r[2][1] * bf_y + r[2][2] * bf_z;
+            // Velocity in ICRF: d/dt (R · r_body) = R · (ω × r_body), where
+            // ω × r_body in the body frame is just (-Ω·y_bf, +Ω·x_bf, 0) with
+            // Ω = Earth sidereal rate. The body position itself is time
+            // independent (topocentric), so we take the body-frame rate and
+            // rotate it.
+            const OMEGA_EARTH_RAD_S: f64 = 7.292_115_0e-5; // rad / sec
+            const SEC_PER_DAY: f64 = 86_400.0;
+            let omega = OMEGA_EARTH_RAD_S * SEC_PER_DAY; // rad / day
+            let vb_x = -omega * bf_y;
+            let vb_y = omega * bf_x;
+            let vb_z = 0.0;
+            let vx = r[0][0] * vb_x + r[0][1] * vb_y + r[0][2] * vb_z;
+            let vy = r[1][0] * vb_x + r[1][1] * vb_y + r[1][2] * vb_z;
+            let vz = r[2][0] * vb_x + r[2][1] * vb_y + r[2][2] * vb_z;
+            (x, y, z, vx, vy, vz)
+        } else {
+            // Fallback: simplified IAU GMST, good to ~50 mas.
+            let gmst = compute_gmst(mjd_tdb);
+            let theta = gmst + lon_rad;
+            let (sin_theta, cos_theta) = theta.sin_cos();
+            let x = earth_radius_au * entry.cos_lat * cos_theta;
+            let y = earth_radius_au * entry.cos_lat * sin_theta;
+            let z = earth_radius_au * entry.sin_lat;
+            const OMEGA_EARTH: f64 = 6.300_388_098_665_74; // rad/day
+            (x, y, z, -OMEGA_EARTH * y, OMEGA_EARTH * x, 0.0)
+        };
 
     // Heliocentric = (Earth_bary + obs_offset) - Sun_bary
     let helio_eq = [

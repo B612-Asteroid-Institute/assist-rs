@@ -3,10 +3,18 @@
 //! Parses `obscodes_extended.json` from the `mpc-obscodes` package into a
 //! lookup table mapping 3-character MPC codes to geodetic parallax
 //! coefficients.
+//!
+//! An optional [`EarthOrientation`] can be attached via
+//! [`ObservatoryTable::with_earth_orientation`]. When present, the table
+//! drives the ITRF93 → ICRF rotation from a binary PCK kernel (matching
+//! JPL Horizons to ~μas); when absent, `compute_observatory_state` falls
+//! back to a simplified IAU GMST formula good to ~50 mas.
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
+use crate::earth_orientation::EarthOrientation;
 use crate::{Error, Result};
 
 /// A single observatory's parallax coefficients.
@@ -30,9 +38,14 @@ impl ObservatoryEntry {
 }
 
 /// Lookup table from MPC observatory code to parallax coefficients.
+///
+/// Optionally carries an [`EarthOrientation`] so that ground-based
+/// observatory states are rotated from ITRF93 into ICRF using a binary
+/// PCK kernel rather than a simplified GMST approximation.
 #[derive(Debug, Clone)]
 pub struct ObservatoryTable {
     entries: HashMap<String, ObservatoryEntry>,
+    earth_orientation: Option<Arc<EarthOrientation>>,
 }
 
 impl ObservatoryTable {
@@ -75,7 +88,22 @@ impl ObservatoryTable {
             );
         }
 
-        Ok(Self { entries })
+        Ok(Self {
+            entries,
+            earth_orientation: None,
+        })
+    }
+
+    /// Attach an [`EarthOrientation`] so ground-observer states use the
+    /// binary PCK ITRF93 → ICRF rotation instead of the GMST fallback.
+    pub fn with_earth_orientation(mut self, eo: EarthOrientation) -> Self {
+        self.earth_orientation = Some(Arc::new(eo));
+        self
+    }
+
+    /// The attached Earth orientation kernel, if any.
+    pub(crate) fn earth_orientation(&self) -> Option<&EarthOrientation> {
+        self.earth_orientation.as_deref()
     }
 
     /// Look up an observatory by its MPC code.
