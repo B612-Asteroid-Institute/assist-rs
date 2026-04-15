@@ -145,6 +145,33 @@ let obs_table = ObservatoryTable::from_json(
 )?;
 ```
 
+### Earth orientation (optional)
+
+For sub-mas accuracy of ground-based observatory positions, attach a binary PCK kernel (NAIF `earth_*.bpc` files) for the ITRF93 → ICRF rotation. Without this, the code falls back to a simplified IAU GMST approximation (~50 mas).
+
+```rust
+use assist_rs::earth_orientation::EarthOrientation;
+
+let eo = EarthOrientation::from_paths(&[
+    "/path/to/earth_latest_high_prec.bpc",
+    "/path/to/earth_620120_250826.bpc",
+])?;
+let obs_table = obs_table.with_earth_orientation(eo);
+```
+
+### Automatic data download (optional)
+
+Enable the `data` feature to use `DataManager`, which downloads and caches the required ephemeris and observatory files:
+
+```rust
+use assist_rs::data::DataManager;
+
+let dm = DataManager::new();           // default: ~/.cache/assist-rs
+let paths = dm.ensure_ready()?;        // downloads if missing
+let ephem = Ephemeris::from_paths(&paths.planets, &paths.asteroids)?;
+let obs_table = ObservatoryTable::from_json(&paths.obscodes)?;
+```
+
 ## Building
 
 The crate vendors REBOUND and ASSIST as git submodules and compiles them from C source via the `cc` crate. No system-level dependencies beyond a C compiler and `libm`.
@@ -157,13 +184,15 @@ cargo build
 
 ## Testing
 
-Tests require ephemeris data files. Set environment variables and run single-threaded (multiple `Ephemeris` instances in parallel can conflict over file descriptors):
+Tests require ephemeris data files. Set environment variables and run single-threaded (REBOUND's global state is not thread-safe across multiple simulations):
 
 ```bash
 export ASSIST_PLANETS_PATH=/path/to/de440.bsp
 export ASSIST_ASTEROIDS_PATH=/path/to/sb441-n16.bsp
 cargo test -- --test-threads=1
 ```
+
+The Horizons validation suite (`tests/horizons_v2_test.rs`) additionally needs the observatory table and (optionally) Earth orientation kernels. Set `ASSIST_DATA_DIR` to the directory containing `obscodes_extended.json` and `earth_*.bpc` files, or use the default `~/.cache/assist-rs`.
 
 ## Versioning
 
