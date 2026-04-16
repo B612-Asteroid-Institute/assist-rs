@@ -29,6 +29,25 @@ fn test_create_simulation() {
 }
 
 #[test]
+fn test_integrate_empty_sim_maps_to_no_particles() {
+    // REBOUND returns REB_STATUS_NO_PARTICLES when integrating a simulation
+    // with zero particles; verify our wrapper maps that to the named
+    // `Error::NoParticles` variant (not the opaque IntegrationFailed fallback).
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let sim = assist_rs::Simulation::new().unwrap();
+    let mut asim = assist_rs::AssistSim::new(sim, &ephem).unwrap();
+    // No particles added — integrate should fail with NoParticles.
+    let err = asim.integrate(1.0).unwrap_err();
+    assert!(
+        matches!(err, assist_rs::Error::NoParticles),
+        "expected Error::NoParticles, got {err:?}"
+    );
+}
+
+#[test]
 fn test_load_ephemeris() {
     let Some(ephem) = load_ephem() else {
         eprintln!("Skipping: ASSIST_PLANETS_PATH / ASSIST_ASTEROIDS_PATH not set");

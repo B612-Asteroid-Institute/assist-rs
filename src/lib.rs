@@ -36,6 +36,29 @@ pub use state::{BodyState, assist_get_state};
 /// Error type for assist-rs operations.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    /// Integration ended early because no particles remain (`REB_STATUS_NO_PARTICLES`).
+    #[error("integration ended: no particles remain in the simulation")]
+    NoParticles,
+
+    /// Integration ended early because two particles had a close encounter
+    /// (`REB_STATUS_ENCOUNTER`; triggered by `exit_min_distance`).
+    #[error("integration ended: close encounter")]
+    CloseEncounter,
+
+    /// Integration ended early because a particle escaped
+    /// (`REB_STATUS_ESCAPE`; triggered by `exit_max_distance`).
+    #[error("integration ended: particle escape")]
+    Escape,
+
+    /// Integration ended early because two particles collided
+    /// (`REB_STATUS_COLLISION`).
+    #[error("integration ended: collision")]
+    Collision,
+
+    /// REBOUND returned a generic/unknown error status.
+    ///
+    /// Holds the raw `REB_STATUS` code for diagnostics; use the named variants
+    /// above to match on the common integration-exit conditions.
     #[error("REBOUND integration failed with status {0}")]
     IntegrationFailed(i32),
 

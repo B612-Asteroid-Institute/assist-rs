@@ -93,10 +93,13 @@ impl Simulation {
     /// Integrate to target time. Returns the status code.
     pub fn integrate(&mut self, tmax: f64) -> Result<()> {
         let status = unsafe { ffi::reb_simulation_integrate(self.ptr, tmax) };
-        if status == ffi::REB_STATUS_SUCCESS || status == ffi::REB_STATUS_RUNNING {
-            Ok(())
-        } else {
-            Err(Error::IntegrationFailed(status))
+        match status {
+            ffi::REB_STATUS_SUCCESS | ffi::REB_STATUS_RUNNING => Ok(()),
+            ffi::REB_STATUS_NO_PARTICLES => Err(Error::NoParticles),
+            ffi::REB_STATUS_ENCOUNTER => Err(Error::CloseEncounter),
+            ffi::REB_STATUS_ESCAPE => Err(Error::Escape),
+            ffi::REB_STATUS_COLLISION => Err(Error::Collision),
+            other => Err(Error::IntegrationFailed(other)),
         }
     }
 

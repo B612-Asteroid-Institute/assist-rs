@@ -98,6 +98,9 @@ pub const REB_STATUS_GENERIC_ERROR: c_int = 1;
 pub const REB_STATUS_NO_PARTICLES: c_int = 2;
 pub const REB_STATUS_ENCOUNTER: c_int = 3;
 pub const REB_STATUS_ESCAPE: c_int = 4;
+pub const REB_STATUS_USER: c_int = 5;
+pub const REB_STATUS_SIGINT: c_int = 6;
+pub const REB_STATUS_COLLISION: c_int = 7;
 
 // ASSIST body IDs
 pub const ASSIST_BODY_SUN: c_int = 0;
