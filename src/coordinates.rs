@@ -138,74 +138,84 @@ pub fn cartesian_to_spherical(dx: [f64; 3], dv: [f64; 3]) -> [f64; 6] {
 
 /// Compute the 6×6 Jacobian of the Cartesian-to-spherical transformation.
 ///
-/// Maps perturbations in (x,y,z,vx,vy,vz) to perturbations in
-/// (rho, ra, dec, drho, dra, ddec).
+/// Maps perturbations in `(x, y, z, vx, vy, vz)` to perturbations in
+/// `(ρ, α, δ, ρ̇, α̇, δ̇)`. Row index = output, column index = input.
+///
+/// The transformation is singular at the celestial poles (`ρ_xy = 0`), where
+/// RA and its rate are not defined. Rows 1, 4 and the dδ/∂{x,y} column entries
+/// of row 2 use `1/ρ_xy` factors and are left at zero when `ρ_xy = 0` rather
+/// than producing NaNs.
 pub fn cartesian_to_spherical_jacobian(dx: [f64; 3], dv: [f64; 3]) -> [[f64; 6]; 6] {
     let [x, y, z] = dx;
     let [vx, vy, vz] = dv;
 
     let rho_sq = x * x + y * y + z * z;
     let rho = rho_sq.sqrt();
+    let rho3 = rho_sq * rho;
     let xy_sq = x * x + y * y;
     let xy = xy_sq.sqrt();
 
+    let s = x * vx + y * vy + z * vz; // ρ · ρ̇
+    let a = x * vy - y * vx; // ρ_xy² · α̇
+
     let mut jac = [[0.0f64; 6]; 6];
 
-    // ∂ρ/∂(x,y,z)
+    // Row 0: ∂ρ/∂(x,y,z,vx,vy,vz)
     jac[0][0] = x / rho;
     jac[0][1] = y / rho;
     jac[0][2] = z / rho;
 
-    // ∂α/∂(x,y,z)
+    // Row 1: ∂α/∂(x,y,z,vx,vy,vz) — α = atan2(y, x)
     if xy_sq > 0.0 {
         jac[1][0] = -y / xy_sq;
         jac[1][1] = x / xy_sq;
     }
 
-    // ∂δ/∂(x,y,z)
+    // Row 2: ∂δ/∂(x,y,z,vx,vy,vz) — δ = asin(z/ρ)
     if xy > 0.0 {
-        let rho3 = rho * rho_sq;
         jac[2][0] = -x * z / (rho_sq * xy);
         jac[2][1] = -y * z / (rho_sq * xy);
         jac[2][2] = xy / rho_sq;
-        let _ = rho3; // suppress warning
     }
 
-    // ∂ρ̇/∂(x,y,z,vx,vy,vz)
-    let rdot = (x * vx + y * vy + z * vz) / rho;
-    jac[3][0] = (vx * rho - x * rdot) / rho_sq;
-    jac[3][1] = (vy * rho - y * rdot) / rho_sq;
-    jac[3][2] = (vz * rho - z * rdot) / rho_sq;
+    // Row 3: ∂ρ̇/∂(x,y,z,vx,vy,vz) — ρ̇ = s/ρ
+    jac[3][0] = (vx * rho_sq - x * s) / rho3;
+    jac[3][1] = (vy * rho_sq - y * s) / rho3;
+    jac[3][2] = (vz * rho_sq - z * s) / rho3;
     jac[3][3] = x / rho;
     jac[3][4] = y / rho;
     jac[3][5] = z / rho;
 
-    // ∂α̇/∂(x,y,z,vx,vy,vz)
+    // Row 4: ∂α̇/∂(x,y,z,vx,vy,vz) — α̇ = A/ρ_xy²
     if xy_sq > 0.0 {
         let xy4 = xy_sq * xy_sq;
-        jac[4][0] = (y * vx + x * vy - 2.0 * x * (x * vy - y * vx) / xy_sq) / xy_sq;
-        // Simplified: ∂(x·vy - y·vx)/∂x / xy² - (x·vy - y·vx)·∂xy²/∂x / xy⁴
-        // = vy/xy² - (x·vy-y·vx)·2x/xy⁴
-        jac[4][0] = -vy / xy_sq + 2.0 * x * (x * vy - y * vx) / xy4;
-        jac[4][1] = vx / xy_sq + 2.0 * y * (x * vy - y * vx) / xy4;
-        // Wait, this is ∂/∂x of [(x·vy - y·vx) / (x²+y²)]
-        // = [vy·(x²+y²) - (x·vy - y·vx)·2x] / (x²+y²)²
-        // Ugh, let me redo this properly.
-        let numer = x * vy - y * vx;
-        jac[4][0] = (vy * xy_sq - numer * 2.0 * x) / xy4;
-        jac[4][1] = (-vx * xy_sq - numer * 2.0 * y) / xy4;
+        jac[4][0] = (vy * xy_sq - 2.0 * x * a) / xy4;
+        jac[4][1] = (-vx * xy_sq - 2.0 * y * a) / xy4;
         jac[4][3] = -y / xy_sq;
         jac[4][4] = x / xy_sq;
     }
 
-    // ∂δ̇/∂(x,y,z,vx,vy,vz) — complex, use numerical approach if needed.
-    // For now, the analytic form is implemented for the position partials;
-    // velocity partials are straightforward.
+    // Row 5: ∂δ̇/∂(x,y,z,vx,vy,vz) — δ̇ = f/g, f = vz·ρ² - z·s, g = ρ²·ρ_xy
     if xy > 0.0 {
-        jac[5][5] = 1.0 / xy; // ∂δ̇/∂vz ≈ 1/|r_xy| (leading term)
-        // Full derivation is lengthy; the observation Jacobian in THOR
-        // composes STM × J_sph, so partial accuracy here is acceptable
-        // for the initial implementation. TODO: complete analytic partials.
+        let f = vz * rho_sq - z * s;
+        let g = rho_sq * xy;
+        // ∂f/∂x = 2x·vz - z·vx;     ∂g/∂x = x·(2·ρ_xy² + ρ²)/ρ_xy
+        // ∂f/∂y = 2y·vz - z·vy;     ∂g/∂y = y·(2·ρ_xy² + ρ²)/ρ_xy
+        // ∂f/∂z = vz·z - s;         ∂g/∂z = 2z·ρ_xy
+        let dgdx = x * (2.0 * xy_sq + rho_sq) / xy;
+        let dgdy = y * (2.0 * xy_sq + rho_sq) / xy;
+        let dgdz = 2.0 * z * xy;
+        let dfdx = 2.0 * x * vz - z * vx;
+        let dfdy = 2.0 * y * vz - z * vy;
+        let dfdz = vz * z - s;
+        let g2 = g * g;
+        jac[5][0] = (dfdx * g - f * dgdx) / g2;
+        jac[5][1] = (dfdy * g - f * dgdy) / g2;
+        jac[5][2] = (dfdz * g - f * dgdz) / g2;
+        // Velocity partials: ∂g/∂v = 0, so ∂δ̇/∂v = (∂f/∂v) / g.
+        jac[5][3] = -z * x / g;
+        jac[5][4] = -z * y / g;
+        jac[5][5] = xy_sq / g; // = ρ_xy / ρ²
     }
 
     jac
@@ -234,5 +244,96 @@ mod tests {
         assert!((sph[0] - 2.0).abs() < 1e-14, "rho");
         assert!(sph[1].abs() < 1e-14, "ra");
         assert!(sph[2].abs() < 1e-14, "dec");
+    }
+
+    /// Central-difference numerical partial of component `k` of the spherical
+    /// output w.r.t. input `j` (0..=2 = x,y,z, 3..=5 = vx,vy,vz).
+    fn numerical_partial(dx: [f64; 3], dv: [f64; 3], k: usize, j: usize, h: f64) -> f64 {
+        let mut dx_p = dx;
+        let mut dx_m = dx;
+        let mut dv_p = dv;
+        let mut dv_m = dv;
+        if j < 3 {
+            dx_p[j] += h;
+            dx_m[j] -= h;
+        } else {
+            dv_p[j - 3] += h;
+            dv_m[j - 3] -= h;
+        }
+        let plus = cartesian_to_spherical(dx_p, dv_p);
+        let minus = cartesian_to_spherical(dx_m, dv_m);
+        let mut d = plus[k] - minus[k];
+        // Handle RA wrap: keep difference in (-π, π].
+        if k == 1 {
+            d = (d + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                - std::f64::consts::PI;
+        }
+        d / (2.0 * h)
+    }
+
+    fn max_row_err(
+        analytic: &[[f64; 6]; 6],
+        dx: [f64; 3],
+        dv: [f64; 3],
+        row: usize,
+        h: f64,
+    ) -> f64 {
+        let mut worst = 0.0f64;
+        for j in 0..6 {
+            let num = numerical_partial(dx, dv, row, j, h);
+            let ana = analytic[row][j];
+            let err = (num - ana).abs();
+            if err > worst {
+                worst = err;
+            }
+        }
+        worst
+    }
+
+    #[test]
+    fn jacobian_matches_finite_differences_generic() {
+        // A generic geometry: no coordinate axis, no special symmetry.
+        let dx = [0.7, -0.4, 0.3];
+        let dv = [0.02, 0.015, -0.008];
+        let jac = cartesian_to_spherical_jacobian(dx, dv);
+        let h = 1e-5;
+        // Each row should agree with central-difference to roughly h² ≈ 1e-10
+        // (times a geometry-dependent constant of order 1).
+        for row in 0..6 {
+            let err = max_row_err(&jac, dx, dv, row, h);
+            assert!(err < 5e-8, "row {row}: max |analytic - FD| = {err:.3e}");
+        }
+    }
+
+    #[test]
+    fn jacobian_matches_finite_differences_near_equator() {
+        // Small z — tests the δ̇ row where numerator approaches 0 but denom
+        // is finite.
+        let dx = [1.5, 0.8, 0.02];
+        let dv = [0.01, -0.005, 0.003];
+        let jac = cartesian_to_spherical_jacobian(dx, dv);
+        let h = 1e-5;
+        for row in 0..6 {
+            let err = max_row_err(&jac, dx, dv, row, h);
+            assert!(err < 5e-8, "row {row}: max |analytic - FD| = {err:.3e}");
+        }
+    }
+
+    #[test]
+    fn jacobian_pole_is_sanitized() {
+        // Exactly on the +z axis: RA / RA rate / dδ/dx,y are undefined.
+        // The function must return zeros in those slots rather than NaN.
+        let dx = [0.0, 0.0, 1.0];
+        let dv = [0.0, 0.0, 0.1];
+        let jac = cartesian_to_spherical_jacobian(dx, dv);
+        for row in 0..6 {
+            for col in 0..6 {
+                assert!(
+                    jac[row][col].is_finite(),
+                    "jac[{row}][{col}] = {} is not finite",
+                    jac[row][col]
+                );
+            }
+        }
     }
 }
