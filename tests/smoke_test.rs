@@ -28,6 +28,14 @@ fn test_create_simulation() {
     drop(sim);
 }
 
+/// Compile-time assertion that `Ephemeris` is `Send + Sync` — the property
+/// relied on by callers that share a single loaded ephemeris across threads
+/// via `Arc<Ephemeris>`.
+const _EPHEMERIS_IS_SEND_SYNC: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<assist_rs::Ephemeris>();
+};
+
 #[test]
 fn test_integrate_empty_sim_maps_to_no_particles() {
     // REBOUND returns REB_STATUS_NO_PARTICLES when integrating a simulation

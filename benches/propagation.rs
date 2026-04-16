@@ -127,7 +127,7 @@ fn raw_c_propagate(
         ffi::assist_rs_sim_set_t(sim, t0);
         ffi::assist_rs_sim_set_exact_finish_time(sim, 1);
 
-        let ax = ffi::assist_attach(sim, ephem.as_ptr());
+        let ax = ffi::assist_attach(sim, ephem.as_ptr().cast_mut());
 
         let p = ffi::reb_particle {
             x: bary_eq_state[0],

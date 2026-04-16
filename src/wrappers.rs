@@ -145,7 +145,12 @@ impl Ephemeris {
     }
 
     /// Raw pointer to the underlying `assist_ephem`. Useful for direct FFI calls.
-    pub fn as_ptr(&self) -> *mut ffi::assist_ephem {
+    ///
+    /// Returns a `*const` pointer because `Ephemeris` implements `Sync` on the
+    /// premise that the underlying data is read-only after construction. Use
+    /// [`pointer::cast_mut`] at the call site if the target FFI signature
+    /// requires `*mut`; that cast is the caller's assertion of unique access.
+    pub fn as_ptr(&self) -> *const ffi::assist_ephem {
         self.ptr
     }
 
@@ -154,6 +159,11 @@ impl Ephemeris {
         unsafe { ffi::assist_rs_ephem_get_jd_ref(self.ptr) }
     }
 
+    /// Override the reference Julian date.
+    ///
+    /// Requires `&mut self`, which prevents concurrent mutation when the
+    /// `Ephemeris` is shared across threads via `Arc`. Must be called before
+    /// any `AssistSim` is attached.
     pub fn set_jd_ref(&mut self, jd: f64) {
         unsafe { ffi::assist_rs_ephem_set_jd_ref(self.ptr, jd) }
     }
