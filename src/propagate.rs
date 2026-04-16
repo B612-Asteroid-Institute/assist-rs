@@ -129,25 +129,22 @@ pub fn assist_propagate(
         -1
     };
 
-    // Allocate particle_params for non-gravitational forces.
+    // Install particle_params for non-gravitational forces.
     // Must be done after variational particles are added since the array
     // covers all particles: 3 doubles per particle (real + variational).
-    // The array is: [A1_0, A2_0, A3_0, ..., dA1_var0, dA2_var0, dA3_var0, ...]
-    let mut _particle_params_storage;
+    // The layout is: [A1_0, A2_0, A3_0, ..., dA1_var0, dA2_var0, dA3_var0, ...]
     if let Some(ng) = non_grav {
         let n_total = asim.sim().n_particles(); // real + variational
-        _particle_params_storage = vec![0.0f64; 3 * n_total];
+        let mut params = vec![0.0f64; 3 * n_total];
         // Set A1, A2, A3 for the test particle (index 0)
-        _particle_params_storage[0] = ng.a1;
-        _particle_params_storage[1] = ng.a2;
-        _particle_params_storage[2] = ng.a3;
+        params[0] = ng.a1;
+        params[1] = ng.a2;
+        params[2] = ng.a3;
         // Variational particle params remain 0 — ASSIST reads dA1/dA2/dA3
         // from particle_params[3*(N_real+v)+{0,1,2}]. Zero means the STM
         // does not include derivatives w.r.t. A1/A2/A3 (which is correct
         // for state-only variational equations).
-        unsafe {
-            asim.set_particle_params(_particle_params_storage.as_mut_ptr());
-        }
+        asim.set_particle_params(params);
     }
 
     // Integrate to each target epoch sequentially (they should be sorted)

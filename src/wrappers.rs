@@ -221,6 +221,9 @@ unsafe impl Sync for Ephemeris {}
 pub struct AssistSim {
     pub(crate) sim: Simulation,
     ax: *mut ffi::assist_extras,
+    /// Backing storage for ASSIST's `particle_params` pointer. Kept alive
+    /// here so its heap buffer lives as long as the simulation.
+    particle_params: Option<Vec<f64>>,
 }
 
 impl AssistSim {
@@ -236,7 +239,11 @@ impl AssistSim {
         // ASSIST sets integrator=IAS15, gravity=NONE, registers force callbacks.
         // Ensure exact finish time is on.
         sim.set_exact_finish_time(true);
-        Ok(Self { sim, ax })
+        Ok(Self {
+            sim,
+            ax,
+            particle_params: None,
+        })
     }
 
     /// Set the ASSIST force model flags.
@@ -301,13 +308,29 @@ impl AssistSim {
         unsafe { ffi::assist_rs_extras_get_r0(self.ax) }
     }
 
-    /// Set the particle_params pointer (flat array, 3 doubles per particle: [A1, A2, A3]).
+    /// Install ASSIST's `particle_params` array (3 doubles per particle:
+    /// `[A1, A2, A3]`, in `[real | variational]` order).
     ///
-    /// # Safety
-    /// The caller must ensure the pointer remains valid for the lifetime of the simulation
-    /// and has at least `3 * n_particles` elements (including variational particles).
-    pub(crate) unsafe fn set_particle_params(&mut self, ptr: *mut f64) {
+    /// Takes ownership of the `Vec`; its heap buffer lives for as long as the
+    /// `AssistSim`, matching the lifetime ASSIST requires for the pointer it
+    /// stashes internally. Must be called *after* all particles (real +
+    /// variational) have been added; `params.len()` must equal
+    /// `3 * n_particles`.
+    ///
+    /// Replacing a previously installed array drops the old storage; the
+    /// previous pointer ASSIST held is already overwritten at that point.
+    pub(crate) fn set_particle_params(&mut self, mut params: Vec<f64>) {
+        let n = self.sim.n_particles();
+        assert_eq!(
+            params.len(),
+            3 * n,
+            "particle_params length must equal 3 * n_particles (got {}, expected {})",
+            params.len(),
+            3 * n
+        );
+        let ptr = params.as_mut_ptr();
         unsafe { ffi::assist_rs_extras_set_particle_params(self.ax, ptr) }
+        self.particle_params = Some(params);
     }
 
     /// Integrate to target time.

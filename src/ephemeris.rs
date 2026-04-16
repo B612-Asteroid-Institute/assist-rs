@@ -203,8 +203,6 @@ struct EphemerisSim<'a> {
     asim: AssistSim,
     ephem: &'a Ephemeris,
     jd_ref: f64,
-    // Kept alive for ASSIST's particle_params pointer; only set when non-grav is active.
-    _particle_params: Option<Vec<f64>>,
 }
 
 impl<'a> EphemerisSim<'a> {
@@ -262,25 +260,19 @@ impl<'a> EphemerisSim<'a> {
             }
         }
 
-        let particle_params = if let Some(ng) = non_grav {
+        if let Some(ng) = non_grav {
             let n_total = asim.sim().n_particles();
             let mut params = vec![0.0f64; 3 * n_total];
             params[0] = ng.a1;
             params[1] = ng.a2;
             params[2] = ng.a3;
-            unsafe {
-                asim.set_particle_params(params.as_mut_ptr());
-            }
-            Some(params)
-        } else {
-            None
-        };
+            asim.set_particle_params(params);
+        }
 
         Ok(Self {
             asim,
             ephem,
             jd_ref,
-            _particle_params: particle_params,
         })
     }
 
