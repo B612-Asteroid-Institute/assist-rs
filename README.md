@@ -54,9 +54,12 @@ let results = assist_propagate(
     &[t1, t2, t3],      // target epochs (MJD TDB, sorted)
     true,                // compute STM
 )?;
-// results[i].state  -> [f64; 6]
-// results[i].stm    -> Option<[[f64; 6]; 6]>
+// results[i].state             -> [f64; 6]
+// results[i].stm               -> Option<[[f64; 6]; 6]>            // ∂x(t)/∂x₀
+// results[i].nongrav_partials  -> Option<[[f64; 3]; 6]>            // ∂x(t)/∂(A1,A2,A3)
 ```
+
+`nongrav_partials` is populated only when `compute_stm = true` *and* the orbit carries non-gravitational parameters.
 
 ### `assist_get_state`
 

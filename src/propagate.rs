@@ -13,10 +13,14 @@ pub struct PropagatedState {
     pub state: [f64; 6],
     /// Epoch (MJD TDB).
     pub epoch: f64,
-    /// 6×6 state transition matrix Φ(t, t₀), row-major.
-    /// Maps initial state perturbations to propagated state perturbations.
-    /// Only populated when `compute_stm` is true.
+    /// 6×6 state transition matrix Φ(t, t₀) = ∂x(t)/∂x₀, row-major, in
+    /// heliocentric ecliptic J2000. Populated when `compute_stm` is true.
     pub stm: Option<[[f64; 6]; 6]>,
+    /// 6×3 partials ∂x(t)/∂(A1, A2, A3), row-major (6 state rows, 3 parameter
+    /// columns), in heliocentric ecliptic J2000. Populated when `compute_stm`
+    /// is true *and* the orbit carries non-gravitational parameters.
+    /// Columns are ordered A1, A2, A3.
+    pub nongrav_partials: Option<[[f64; 3]; 6]>,
 }
 
 /// Propagate a test particle from an initial heliocentric ecliptic J2000 orbit.
@@ -98,16 +102,26 @@ pub fn assist_propagate(
         }
     }
 
-    // Add variational particles if STM requested.
-    // With 1 test particle, each call adds 1 variational particle at indices 1..7.
-    let var_start_idx = if compute_stm {
-        let idx = asim.sim_mut().add_variation_1st_order(0);
-        for _ in 1..6 {
+    // Add variational particles if STM requested:
+    //   d=0..5: unit state perturbations (column d of ∂x/∂x₀)
+    //   d=6..8: unit perturbations of A1, A2, A3 (columns of ∂x/∂A)
+    // Parameter variational particles only exist when the orbit carries
+    // non-gravitational parameters; otherwise there's nothing to differentiate.
+    let want_nongrav_partials = compute_stm && non_grav.is_some();
+    let n_var = if want_nongrav_partials {
+        9
+    } else if compute_stm {
+        6
+    } else {
+        0
+    };
+
+    if compute_stm {
+        for _ in 0..n_var {
             asim.sim_mut().add_variation_1st_order(0);
         }
 
-        // Initialize each variational particle with a unit perturbation in one dimension.
-        // After integration, particle[1+d] gives column d of the STM.
+        // State variational particles: unit perturbation in one dimension.
         unsafe {
             let ptr = ffi::assist_rs_sim_get_particles(asim.sim().ptr);
             for d in 0..6 {
@@ -123,27 +137,34 @@ pub fn assist_propagate(
                 }
                 *ptr.add(1 + d) = p;
             }
+            // Parameter variational particles already start at zero state
+            // (reb_particle::default()) — that's the correct IC for ∂x/∂A.
         }
-        idx
-    } else {
-        -1
-    };
+    }
 
     // Install particle_params for non-gravitational forces.
     // Must be done after variational particles are added since the array
     // covers all particles: 3 doubles per particle (real + variational).
-    // The layout is: [A1_0, A2_0, A3_0, ..., dA1_var0, dA2_var0, dA3_var0, ...]
+    // Layout: [A1, A2, A3 | dA1_var0, dA2_var0, dA3_var0 | ...]
+    //
+    // For state variational particles (d=0..5), the parameter perturbation
+    // is zero — ∂A_j/∂x₀_i = 0. For the three parameter variational particles
+    // (d=6..8) we set a unit perturbation in one of A1, A2, A3 so ASSIST
+    // integrates the corresponding sensitivity.
     if let Some(ng) = non_grav {
         let n_total = asim.sim().n_particles(); // real + variational
         let mut params = vec![0.0f64; 3 * n_total];
-        // Set A1, A2, A3 for the test particle (index 0)
         params[0] = ng.a1;
         params[1] = ng.a2;
         params[2] = ng.a3;
-        // Variational particle params remain 0 — ASSIST reads dA1/dA2/dA3
-        // from particle_params[3*(N_real+v)+{0,1,2}]. Zero means the STM
-        // does not include derivatives w.r.t. A1/A2/A3 (which is correct
-        // for state-only variational equations).
+        if want_nongrav_partials {
+            // Variational particles are at indices 1..=9; param variationals
+            // are the last three.
+            let n_real = 1usize;
+            for k in 0..3 {
+                params[3 * (n_real + 6 + k) + k] = 1.0;
+            }
+        }
         asim.set_particle_params(params);
     }
 
@@ -174,29 +195,64 @@ pub fn assist_propagate(
         ];
         let helio_ecl = equatorial_to_ecliptic(&helio_eq);
 
-        // Extract STM if requested
-        let stm = if compute_stm && var_start_idx >= 0 {
-            let mut stm = [[0.0f64; 6]; 6];
+        // Extract STM and (optional) non-grav partials if requested.
+        let (stm, nongrav_partials) = if compute_stm {
             let n_real = 1usize;
-            for (d, vp) in particles[n_real..].iter().enumerate().take(6) {
+            let mut stm_eq = [[0.0f64; 6]; 6];
+            for (d, vp) in particles[n_real..n_real + 6].iter().enumerate() {
                 // Column d of the STM (in barycentric equatorial)
-                stm[0][d] = vp.x;
-                stm[1][d] = vp.y;
-                stm[2][d] = vp.z;
-                stm[3][d] = vp.vx;
-                stm[4][d] = vp.vy;
-                stm[5][d] = vp.vz;
+                stm_eq[0][d] = vp.x;
+                stm_eq[1][d] = vp.y;
+                stm_eq[2][d] = vp.z;
+                stm_eq[3][d] = vp.vx;
+                stm_eq[4][d] = vp.vy;
+                stm_eq[5][d] = vp.vz;
             }
-            // Rotate STM from equatorial to ecliptic: R × STM_eq × R^T
-            Some(rotate_matrix_eq_to_ecl(&stm))
+            // Rotate 6×6 STM from equatorial to ecliptic: R × STM_eq × R^T.
+            let stm = Some(rotate_matrix_eq_to_ecl(&stm_eq));
+
+            let nongrav = if want_nongrav_partials {
+                let mut ng_eq = [[0.0f64; 3]; 6]; // columns: A1, A2, A3
+                for (k, vp) in particles[n_real + 6..n_real + 9].iter().enumerate() {
+                    ng_eq[0][k] = vp.x;
+                    ng_eq[1][k] = vp.y;
+                    ng_eq[2][k] = vp.z;
+                    ng_eq[3][k] = vp.vx;
+                    ng_eq[4][k] = vp.vy;
+                    ng_eq[5][k] = vp.vz;
+                }
+                // The helio-ecl state is a *linear* function of bary-eq state
+                // (subtract Sun(t), rotate by R); Sun(t) doesn't depend on A,
+                // so the parameter partial transforms like a plain 6-vector.
+                let mut ng_ecl = [[0.0f64; 3]; 6];
+                for k in 0..3 {
+                    let col = [
+                        ng_eq[0][k],
+                        ng_eq[1][k],
+                        ng_eq[2][k],
+                        ng_eq[3][k],
+                        ng_eq[4][k],
+                        ng_eq[5][k],
+                    ];
+                    let rotated = equatorial_to_ecliptic(&col);
+                    for r in 0..6 {
+                        ng_ecl[r][k] = rotated[r];
+                    }
+                }
+                Some(ng_ecl)
+            } else {
+                None
+            };
+            (stm, nongrav)
         } else {
-            None
+            (None, None)
         };
 
         results.push(PropagatedState {
             state: helio_ecl,
             epoch: target_mjd,
             stm,
+            nongrav_partials,
         });
     }
 

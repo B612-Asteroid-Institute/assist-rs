@@ -368,3 +368,90 @@ fn test_propagate_with_non_grav() {
 
     eprintln!("Non-grav effect over 30 days: pos_diff={pos_diff:.2e} AU, state_diff={dx:.2e}");
 }
+
+#[test]
+fn test_nongrav_partials_match_finite_differences() {
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+
+    let ceres_state = [
+        -1.938_169_72,
+        2.289_213_79,
+        1.094_048_30,
+        -0.008_744_54,
+        -0.005_523_16,
+        0.001_174_22,
+    ];
+    let epoch = 60000.0;
+    let target = [epoch + 30.0];
+
+    // Baseline run: variational STM + nongrav partials.
+    let a = [2e-10, 1e-10, -5e-11];
+    let ng = assist_rs::NonGravParams::new(a[0], a[1], a[2]);
+    let orbit = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng);
+    let with_partials =
+        assist_rs::assist_propagate(&ephem, &orbit, &target, true).unwrap();
+    assert!(with_partials[0].stm.is_some(), "STM not populated");
+    let partials = with_partials[0]
+        .nongrav_partials
+        .expect("nongrav_partials not populated for non-grav orbit");
+
+    // Finite-difference each A_k in turn. Step chosen well above the
+    // adaptive integrator's per-step noise but small enough to stay in
+    // the linear regime of A perturbations.
+    let h = 1e-12;
+    for k in 0..3 {
+        let mut a_plus = a;
+        let mut a_minus = a;
+        a_plus[k] += h;
+        a_minus[k] -= h;
+        let ng_plus = assist_rs::NonGravParams::new(a_plus[0], a_plus[1], a_plus[2]);
+        let ng_minus = assist_rs::NonGravParams::new(a_minus[0], a_minus[1], a_minus[2]);
+        let o_plus = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng_plus);
+        let o_minus = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng_minus);
+        let s_plus = assist_rs::assist_propagate(&ephem, &o_plus, &target, false).unwrap();
+        let s_minus = assist_rs::assist_propagate(&ephem, &o_minus, &target, false).unwrap();
+
+        for row in 0..6 {
+            let fd = (s_plus[0].state[row] - s_minus[0].state[row]) / (2.0 * h);
+            let analytic = partials[row][k];
+            // Within 0.5% of the FD estimate — loose enough to absorb the
+            // adaptive-step integrator's per-run noise, tight enough to
+            // detect a missing factor of 2 or a sign flip.
+            let tol = 5e-3 * analytic.abs().max(1e-6);
+            let err = (fd - analytic).abs();
+            assert!(
+                err < tol,
+                "∂x[{row}]/∂A{} mismatch: analytic={analytic:.6e} FD={fd:.6e} (tol={tol:.2e})",
+                k + 1,
+            );
+        }
+    }
+}
+
+#[test]
+fn test_nongrav_partials_absent_without_nongrav() {
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+
+    let ceres_state = [
+        -1.938_169_72,
+        2.289_213_79,
+        1.094_048_30,
+        -0.008_744_54,
+        -0.005_523_16,
+        0.001_174_22,
+    ];
+    let orbit = assist_rs::Orbit::new(ceres_state, 60000.0);
+    let result =
+        assist_rs::assist_propagate(&ephem, &orbit, &[60030.0], true).unwrap();
+    assert!(result[0].stm.is_some());
+    assert!(
+        result[0].nongrav_partials.is_none(),
+        "nongrav_partials should be None for gravity-only orbit"
+    );
+}
