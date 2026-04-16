@@ -207,6 +207,14 @@ impl Drop for Ephemeris {
 // SAFETY: Ephemeris data is read-only after construction. The underlying
 // assist_ephem struct is only mutated during init (assist_ephem_create),
 // and all subsequent access (assist_get_particle*) is const-correct in C.
+// `set_jd_ref` takes &mut self so Rust's aliasing rules prevent races through
+// Arc<Ephemeris>, and `as_ptr` returns *const to forbid back-door mutation.
+//
+// Note on process-wide concurrency with AssistSim: REBOUND's IAS15 integrator
+// and ASSIST force routines use only `static const` tables (no mutable global
+// state). The only shared process-global is the SIGINT handler / flag
+// (reb_sigint), which all concurrent simulations legitimately share.
+// Concurrent AssistSim instances on separate threads are therefore safe.
 unsafe impl Send for Ephemeris {}
 unsafe impl Sync for Ephemeris {}
 

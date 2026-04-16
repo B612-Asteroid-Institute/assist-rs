@@ -37,6 +37,64 @@ const _EPHEMERIS_IS_SEND_SYNC: fn() = || {
 };
 
 #[test]
+fn test_concurrent_assistsim_matches_serial() {
+    // The audit in assist-rs-753 concluded that concurrent `AssistSim`
+    // instances on separate threads are safe (REBOUND's hot paths use only
+    // `static const` tables; the only process-shared state is the SIGINT
+    // handler). This test actually exercises that: propagate the same orbit
+    // many times in parallel and serially, and assert bit-for-bit equal
+    // results. A hidden race on global state would show up as nondeterministic
+    // output across runs or between the serial and parallel paths.
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+
+    let orbit = assist_rs::Orbit::new(
+        [
+            -1.938_169_72,
+            2.289_213_79,
+            1.094_048_30,
+            -0.008_744_54,
+            -0.005_523_16,
+            0.001_174_22,
+        ],
+        60000.0,
+    );
+    let targets = [60030.0];
+    const N: usize = 32;
+
+    // Serial baseline.
+    let serial: Vec<[f64; 6]> = (0..N)
+        .map(|_| {
+            assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap()[0].state
+        })
+        .collect();
+    // All serial runs must be bitwise identical (same IC, same integrator).
+    for (i, s) in serial.iter().enumerate().skip(1) {
+        assert_eq!(
+            serial[0], *s,
+            "serial run {i} disagrees with serial run 0 — integrator is non-deterministic?"
+        );
+    }
+
+    // Parallel runs of the same orbit must also agree bitwise with serial.
+    use rayon::prelude::*;
+    let parallel: Vec<[f64; 6]> = (0..N)
+        .into_par_iter()
+        .map(|_| {
+            assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap()[0].state
+        })
+        .collect();
+    for (i, p) in parallel.iter().enumerate() {
+        assert_eq!(
+            serial[0], *p,
+            "parallel run {i} disagrees with serial — REBOUND global state race?"
+        );
+    }
+}
+
+#[test]
 fn test_integrate_empty_sim_maps_to_no_particles() {
     // REBOUND returns REB_STATUS_NO_PARTICLES when integrating a simulation
     // with zero particles; verify our wrapper maps that to the named

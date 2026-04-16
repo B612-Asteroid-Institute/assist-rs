@@ -187,13 +187,15 @@ cargo build
 
 ## Testing
 
-Tests require ephemeris data files. Set environment variables and run single-threaded (REBOUND's global state is not thread-safe across multiple simulations):
+Tests require ephemeris data files. Set environment variables and run single-threaded to keep test output readable:
 
 ```bash
 export ASSIST_PLANETS_PATH=/path/to/de440.bsp
 export ASSIST_ASTEROIDS_PATH=/path/to/sb441-n16.bsp
 cargo test -- --test-threads=1
 ```
+
+Concurrent `AssistSim` instances on separate threads are actually safe — see the thread-safety notes on `Ephemeris` in `src/wrappers.rs`. The `--test-threads=1` flag is preserved because stdout/stderr from multiple tests interleaves badly, not because REBOUND has races we're hiding.
 
 The Horizons validation suite (`tests/horizons_v2_test.rs`) additionally needs the observatory table and (optionally) Earth orientation kernels. Set `ASSIST_DATA_DIR` to the directory containing `obscodes_extended.json` and `earth_*.bpc` files, or use the default `~/.cache/assist-rs`.
 
