@@ -106,22 +106,51 @@ fn load_reference() -> Option<Reference> {
     serde_json::from_str(&std::fs::read_to_string(&p).ok()?).ok()
 }
 
-fn load_earth_orientation() -> Option<assist_rs::earth_orientation::EarthOrientation> {
-    let dir = cache_dir();
-    let current = dir.join("earth_latest_high_prec.bpc");
-    if !current.exists() {
-        return None;
-    }
-    let mut paths: Vec<PathBuf> = vec![current];
-    for name in [
-        "earth_620120_250826.bpc",
-        "earth_2025_250826_2125_predict.bpc",
-    ] {
-        let p = dir.join(name);
-        if p.exists() {
-            paths.push(p);
+/// Resolve an Earth orientation kernel path, preferring the B612 naif-eop-*
+/// Python package's env-var override (set by CI) and falling back to the
+/// filename inside `ASSIST_DATA_DIR` for local dev.
+fn resolve_eop_path(env_var: &str, filenames: &[&str]) -> Option<PathBuf> {
+    if let Ok(p) = std::env::var(env_var) {
+        let path = PathBuf::from(p);
+        if path.exists() {
+            return Some(path);
         }
     }
+    let dir = cache_dir();
+    for name in filenames {
+        let p = dir.join(name);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+fn load_earth_orientation() -> Option<assist_rs::earth_orientation::EarthOrientation> {
+    // SPICE-idiomatic load order: predict first, historical next, current
+    // high-precision last so it wins wherever it has coverage.
+    let predict = resolve_eop_path(
+        "ASSIST_EOP_PREDICT",
+        &[
+            "earth_200101_990827_predict.bpc",
+            "earth_2025_250826_2125_predict.bpc",
+        ],
+    );
+    let historical = resolve_eop_path(
+        "ASSIST_EOP_HISTORICAL",
+        &["earth_620120_240827.bpc", "earth_620120_250826.bpc"],
+    );
+    let current = resolve_eop_path("ASSIST_EOP_HIGH_PREC", &["earth_latest_high_prec.bpc"])?;
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+    if let Some(p) = predict {
+        paths.push(p);
+    }
+    if let Some(h) = historical {
+        paths.push(h);
+    }
+    paths.push(current);
+
     assist_rs::earth_orientation::EarthOrientation::from_paths(&paths).ok()
 }
 
@@ -334,7 +363,13 @@ fn test_ephemeris_against_horizons_v2() {
         return;
     };
 
-    let obscodes = cache_dir().join("obscodes_extended.json");
+    // Prefer the B612 mpc-obscodes Python package (CI sets MPC_OBSCODES_PATH),
+    // falling back to a cached file in ASSIST_DATA_DIR for local dev.
+    let obscodes = std::env::var("MPC_OBSCODES_PATH")
+        .map(PathBuf::from)
+        .ok()
+        .filter(|p| p.exists())
+        .unwrap_or_else(|| cache_dir().join("obscodes_extended.json"));
     if !obscodes.exists() {
         eprintln!("Skipping: {} not found", obscodes.display());
         return;

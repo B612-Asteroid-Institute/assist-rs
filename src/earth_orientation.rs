@@ -133,27 +133,33 @@ impl Type2Segment {
 ///
 /// # Kernel priority
 ///
-/// Files are searched in the order provided. For epochs covered by more than
-/// one file, the earlier-listed kernel wins. A typical high-precision setup is:
+/// Mirrors SPICE's `furnsh` semantics: **later-loaded kernels win**. For
+/// epochs covered by more than one file, the last kernel in the `paths`
+/// slice whose segment covers the requested ET takes precedence. A typical
+/// high-precision setup therefore places long-term predict and historical
+/// kernels first, with the current high-precision kernel last so it wins
+/// wherever it has coverage:
 ///
 /// ```no_run
 /// # use assist_rs::earth_orientation::EarthOrientation;
 /// # use std::path::PathBuf;
 /// # let cache: PathBuf = PathBuf::new();
 /// let eo = EarthOrientation::from_paths(&[
-///     cache.join("earth_latest_high_prec.bpc"),
-///     cache.join("earth_620120_250826.bpc"),
-///     cache.join("earth_2025_250826_2125_predict.bpc"),
+///     cache.join("earth_200101_990827_predict.bpc"),   // loaded first
+///     cache.join("earth_620120_240827.bpc"),           // historical
+///     cache.join("earth_latest_high_prec.bpc"),        // loaded last — wins
 /// ])?;
 /// # Ok::<(), assist_rs::earth_orientation::EarthOrientationError>(())
 /// ```
 ///
-/// which serves the current file first (highest precision, ~year 2000–2026),
-/// falling back to the historical file for earlier dates and the long-term
-/// predict for later dates.
+/// At current epochs the high-precision kernel is used; the historical
+/// kernel covers earlier dates and the long-term predict covers later
+/// dates — same result as calling `spiceypy.furnsh` on each file in the
+/// same order.
 #[derive(Debug)]
 pub struct EarthOrientation {
-    /// Segments in user-supplied order (priority = earlier first).
+    /// Segments in user-supplied order (later entries win at overlapping
+    /// epochs — last-in-wins, matching SPICE `furnsh` semantics).
     segments: Vec<Type2Segment>,
 }
 
@@ -193,7 +199,9 @@ impl EarthOrientation {
     /// past J2000 TDB). Used internally and by callers that already have ET,
     /// bypassing the ~2.5e-7 s precision loss of an MJD round-trip.
     pub fn rotation_itrf_to_j2000_et(&self, et: f64) -> Result<[[f64; 3]; 3]> {
-        let seg = self.segments.iter().find(|s| s.covers(et)).ok_or(
+        // Last-in-wins: walk segments in reverse of load order and return
+        // the first (== last-loaded) one that covers this ET.
+        let seg = self.segments.iter().rev().find(|s| s.covers(et)).ok_or(
             EarthOrientationError::OutOfRange {
                 mjd_tdb: J2000_MJD + et / SEC_PER_DAY,
             },
@@ -906,7 +914,11 @@ mod tests {
         if !current.exists() || !historical.exists() || !predict.exists() {
             return;
         }
-        let eo = EarthOrientation::from_paths(&[&current, &historical, &predict]).unwrap();
+        // Load in SPICE-idiomatic order: the most authoritative (current
+        // high-precision) goes last so last-in-wins makes it the default for
+        // any epoch it covers. Historical and predict fill the gaps before
+        // and after.
+        let eo = EarthOrientation::from_paths(&[&predict, &historical, &current]).unwrap();
 
         // Historical-era ET (current kernel doesn't cover, historical does).
         let hist_et = -500_000_000.0;
@@ -918,7 +930,7 @@ mod tests {
             .1;
         assert!(max_abs_diff(&transpose3(&m_hist), &expected_hist) < 1e-13);
 
-        // Current-era ET (current kernel wins per priority).
+        // Current-era ET: current kernel covers, so it wins under last-in-wins.
         let cur_et = 500_000_000.0;
         let m_cur = eo.rotation_itrf_to_j2000_et(cur_et).unwrap();
         let expected_cur = REFERENCE_MATRICES
@@ -928,7 +940,7 @@ mod tests {
             .1;
         assert!(max_abs_diff(&transpose3(&m_cur), &expected_cur) < 1e-13);
 
-        // Predict-era ET (far future, only predict kernel covers).
+        // Predict-era ET (far future; neither current nor historical covers).
         let pred_et = 2_000_000_000.0;
         let m_pred = eo.rotation_itrf_to_j2000_et(pred_et).unwrap();
         let expected_pred = PREDICT_REFERENCE
@@ -937,6 +949,42 @@ mod tests {
             .unwrap()
             .1;
         assert!(max_abs_diff(&transpose3(&m_pred), &expected_pred) < 1e-13);
+    }
+
+    /// Directly exercise last-in-wins: load the same kernel last, then swap
+    /// it to first, and verify the result at an overlapping epoch follows
+    /// the last-loaded file.
+    #[test]
+    fn last_in_wins_at_overlapping_epochs() {
+        let current = cache_path("earth_latest_high_prec.bpc");
+        let historical = cache_path("earth_620120_250826.bpc");
+        if !current.exists() || !historical.exists() {
+            return;
+        }
+        // `current` and `historical` both cover recent decades. Query an ET
+        // inside both kernels' coverage; the chosen rotation should depend
+        // on load order.
+        let et = 500_000_000.0; // mid-2015
+
+        let eo_current_last = EarthOrientation::from_paths(&[&historical, &current]).unwrap();
+        let m_current_last = eo_current_last.rotation_itrf_to_j2000_et(et).unwrap();
+
+        let eo_historical_last = EarthOrientation::from_paths(&[&current, &historical]).unwrap();
+        let m_historical_last = eo_historical_last.rotation_itrf_to_j2000_et(et).unwrap();
+
+        // `current` last should match the expected reference matrices (the
+        // reference data was generated against the current high-precision
+        // kernel).
+        let expected = REFERENCE_MATRICES.iter().find(|(e, _)| *e == et).unwrap().1;
+        assert!(max_abs_diff(&transpose3(&m_current_last), &expected) < 1e-13);
+
+        // Swapping order must produce a *different* rotation (otherwise the
+        // test isn't observing kernel precedence at all).
+        let diff = max_abs_diff(&m_current_last, &m_historical_last);
+        assert!(
+            diff > 1e-12,
+            "expected load-order to change the result, but diff = {diff:.3e}"
+        );
     }
 
     #[test]
