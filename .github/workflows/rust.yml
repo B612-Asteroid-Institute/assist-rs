@@ -51,13 +51,24 @@ jobs:
       - name: Unit tests
         run: cargo test --verbose -- --test-threads=1
 
-      - name: Install ephemeris data packages
-        run: pip install --timeout 600 --retries 5 naif-de440 jpl-small-bodies-de441-n16
+      - name: Install ephemeris and Earth-orientation data packages
+        run: |
+          pip install --timeout 600 --retries 5 \
+            naif-de440 \
+            jpl-small-bodies-de441-n16 \
+            mpc-obscodes \
+            naif-eop-high-prec \
+            naif-eop-historical \
+            naif-eop-predict
 
-      - name: Resolve ephemeris paths
+      - name: Resolve data paths
         run: |
           echo "ASSIST_PLANETS_PATH=$(python3 -c 'import naif_de440; print(naif_de440.de440)')" >> $GITHUB_ENV
           echo "ASSIST_ASTEROIDS_PATH=$(python3 -c 'import jpl_small_bodies_de441_n16 as sb; print(sb.de441_n16)')" >> $GITHUB_ENV
+          echo "MPC_OBSCODES_PATH=$(python3 -c 'from mpc_obscodes import mpc_obscodes; print(mpc_obscodes)')" >> $GITHUB_ENV
+          echo "ASSIST_EOP_HIGH_PREC=$(python3 -c 'import naif_eop_high_prec; print(naif_eop_high_prec.eop_high_prec)')" >> $GITHUB_ENV
+          echo "ASSIST_EOP_HISTORICAL=$(python3 -c 'import naif_eop_historical; print(naif_eop_historical.eop_historical)')" >> $GITHUB_ENV
+          echo "ASSIST_EOP_PREDICT=$(python3 -c 'import naif_eop_predict; print(naif_eop_predict.eop_predict)')" >> $GITHUB_ENV
 
       - name: Integration tests
         run: cargo test --release --verbose -- --test-threads=1
