@@ -181,13 +181,20 @@ impl DataManager {
         Ok(self.paths())
     }
 
-    /// Ensure all three files exist, downloading any that are missing or stale.
+    /// Ensure all three files exist, downloading any that are missing, locally
+    /// corrupted, or stale upstream.
     ///
-    /// - Missing → download.
-    /// - Exists and static (`de440.bsp`, `sb441-n16.bsp`) → skip.
-    /// - Exists and non-static with sidecar (`obscodes_extended.json`) → HEAD
-    ///   to check Content-Length / Last-Modified; re-download if either differs.
-    /// - Exists without sidecar → skip (assume valid).
+    /// For each file:
+    ///
+    /// - If the file is missing → download.
+    /// - Else if a sidecar exists, compare the local file's MD5 against the
+    ///   stored MD5. Mismatch implies local corruption or tampering →
+    ///   re-download.
+    /// - Else if the file is non-static (e.g. `obscodes_extended.json`), HEAD
+    ///   the remote and re-download if `Content-Length` or `Last-Modified`
+    ///   differs from the sidecar.
+    /// - Else (static file, MD5 matches, or no sidecar to check against) →
+    ///   keep the cached copy.
     pub fn ensure_ready(&self) -> Result<AssistDataPaths, DataError> {
         fs::create_dir_all(&self.data_dir).map_err(DataError::Io)?;
 
@@ -195,30 +202,55 @@ impl DataManager {
             let path = self.data_dir.join(entry.filename);
             let meta_path = self.data_dir.join(format!("{}.meta.json", entry.filename));
 
-            if path.exists() {
-                if entry.is_static {
-                    continue;
-                }
-                if meta_path.exists() {
-                    if let Ok(meta) = read_meta(&meta_path) {
-                        match is_stale(entry.url, &meta) {
-                            Ok(true) => {
-                                eprintln!("Updating {} (remote changed)...", entry.filename);
-                                download(entry, &path, &meta_path)?;
-                            }
-                            Ok(false) => {}
-                            Err(e) => {
-                                eprintln!(
-                                    "Warning: staleness check failed for {}: {e}",
-                                    entry.filename
-                                );
-                            }
-                        }
-                    }
-                }
-            } else {
+            if !path.exists() {
                 eprintln!("Downloading {}...", entry.filename);
                 download(entry, &path, &meta_path)?;
+                continue;
+            }
+
+            let Ok(meta) = read_meta(&meta_path) else {
+                // No sidecar — can't validate, assume caller knows what they
+                // put in the cache directory.
+                continue;
+            };
+
+            // Integrity check: the local file's MD5 must match what we
+            // recorded when we downloaded it. Catches on-disk corruption and
+            // deliberate replacement.
+            match local_md5_matches(&path, &meta.md5) {
+                Ok(true) => {}
+                Ok(false) => {
+                    eprintln!(
+                        "Re-downloading {} (local MD5 mismatch)...",
+                        entry.filename
+                    );
+                    download(entry, &path, &meta_path)?;
+                    continue;
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: MD5 check failed for {}: {e}",
+                        entry.filename
+                    );
+                }
+            }
+
+            if entry.is_static {
+                continue;
+            }
+
+            match is_stale(entry.url, &meta) {
+                Ok(true) => {
+                    eprintln!("Updating {} (remote changed)...", entry.filename);
+                    download(entry, &path, &meta_path)?;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!(
+                        "Warning: staleness check failed for {}: {e}",
+                        entry.filename
+                    );
+                }
             }
         }
 
@@ -330,6 +362,17 @@ fn read_meta(path: &Path) -> Result<FileMeta, DataError> {
         .map_err(|e| DataError::Io(io::Error::new(io::ErrorKind::InvalidData, e)))
 }
 
+/// Compare the MD5 of `path` against `expected_hex`. Returns `Ok(true)` on
+/// match. Skips the check (returns `Ok(true)`) when the sidecar MD5 is empty,
+/// which covers legacy sidecars written before MD5 was recorded.
+fn local_md5_matches(path: &Path, expected_hex: &str) -> Result<bool, DataError> {
+    if expected_hex.is_empty() {
+        return Ok(true);
+    }
+    let actual = compute_md5(path)?;
+    Ok(actual.eq_ignore_ascii_case(expected_hex))
+}
+
 fn compute_md5(path: &Path) -> Result<String, DataError> {
     let mut file = File::open(path).map_err(DataError::Io)?;
     let mut context = md5::Context::new();
@@ -342,4 +385,79 @@ fn compute_md5(path: &Path) -> Result<String, DataError> {
         context.consume(&buffer[..n]);
     }
     Ok(format!("{:x}", context.compute()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Known-answer MD5 tests from RFC 1321 (plus the empty string) so the
+    /// hash agrees with what the rest of the world calls MD5.
+    #[test]
+    fn compute_md5_matches_rfc1321_vectors() {
+        let dir = tempfile::tempdir().unwrap();
+        let cases: &[(&[u8], &str)] = &[
+            (b"", "d41d8cd98f00b204e9800998ecf8427e"),
+            (b"abc", "900150983cd24fb0d6963f7d28e17f72"),
+            (
+                b"The quick brown fox jumps over the lazy dog",
+                "9e107d9d372bb6826bd81d3542a419d6",
+            ),
+        ];
+        for (i, (payload, expected)) in cases.iter().enumerate() {
+            let path = dir.path().join(format!("case_{i}.bin"));
+            fs::write(&path, payload).unwrap();
+            let got = compute_md5(&path).unwrap();
+            assert_eq!(got, *expected, "case {i}: {:?}", std::str::from_utf8(payload));
+        }
+    }
+
+    #[test]
+    fn local_md5_matches_detects_correct_and_incorrect_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("payload.txt");
+        fs::write(&path, b"hello").unwrap();
+        let actual = compute_md5(&path).unwrap();
+
+        // Exact match.
+        assert!(local_md5_matches(&path, &actual).unwrap());
+        // Case-insensitive match.
+        assert!(local_md5_matches(&path, &actual.to_uppercase()).unwrap());
+        // Mismatch.
+        assert!(!local_md5_matches(&path, "0".repeat(32).as_str()).unwrap());
+    }
+
+    #[test]
+    fn local_md5_matches_skips_check_when_sidecar_has_empty_hash() {
+        // Legacy sidecars written before MD5 was recorded will have md5 = "";
+        // the helper must not refuse to validate them (we'd re-download every
+        // start), nor error on the missing file check.
+        let dir = tempfile::tempdir().unwrap();
+        let nonexistent = dir.path().join("not_there.bin");
+        assert!(local_md5_matches(&nonexistent, "").unwrap());
+    }
+
+    #[test]
+    fn meta_round_trips_through_sidecar() {
+        // Writing the sidecar and reading it back must preserve every field
+        // the staleness check relies on (content_length, last_modified, md5).
+        let dir = tempfile::tempdir().unwrap();
+        let meta_path = dir.path().join("kernel.meta.json");
+        let meta = FileMeta {
+            url: "https://example.com/kernel.bsp".into(),
+            downloaded_at: 1_700_000_000,
+            content_length: Some(42),
+            last_modified: Some("Mon, 21 Oct 2024 12:00:00 GMT".into()),
+            md5: "d41d8cd98f00b204e9800998ecf8427e".into(),
+        };
+        let json = serde_json::to_string_pretty(&meta).unwrap();
+        fs::write(&meta_path, json).unwrap();
+
+        let back = read_meta(&meta_path).unwrap();
+        assert_eq!(back.url, meta.url);
+        assert_eq!(back.downloaded_at, meta.downloaded_at);
+        assert_eq!(back.content_length, meta.content_length);
+        assert_eq!(back.last_modified, meta.last_modified);
+        assert_eq!(back.md5, meta.md5);
+    }
 }
