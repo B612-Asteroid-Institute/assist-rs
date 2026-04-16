@@ -66,9 +66,7 @@ fn test_concurrent_assistsim_matches_serial() {
 
     // Serial baseline.
     let serial: Vec<[f64; 6]> = (0..N)
-        .map(|_| {
-            assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap()[0].state
-        })
+        .map(|_| assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap()[0].state)
         .collect();
     // All serial runs must be bitwise identical (same IC, same integrator).
     for (i, s) in serial.iter().enumerate().skip(1) {
@@ -82,9 +80,7 @@ fn test_concurrent_assistsim_matches_serial() {
     use rayon::prelude::*;
     let parallel: Vec<[f64; 6]> = (0..N)
         .into_par_iter()
-        .map(|_| {
-            assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap()[0].state
-        })
+        .map(|_| assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap()[0].state)
         .collect();
     for (i, p) in parallel.iter().enumerate() {
         assert_eq!(
@@ -449,8 +445,7 @@ fn test_nongrav_partials_match_finite_differences() {
     let a = [2e-10, 1e-10, -5e-11];
     let ng = assist_rs::NonGravParams::new(a[0], a[1], a[2]);
     let orbit = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng);
-    let with_partials =
-        assist_rs::assist_propagate(&ephem, &orbit, &target, true).unwrap();
+    let with_partials = assist_rs::assist_propagate(&ephem, &orbit, &target, true).unwrap();
     assert!(with_partials[0].stm.is_some(), "STM not populated");
     let partials = with_partials[0]
         .nongrav_partials
@@ -505,8 +500,7 @@ fn test_nongrav_partials_absent_without_nongrav() {
         0.001_174_22,
     ];
     let orbit = assist_rs::Orbit::new(ceres_state, 60000.0);
-    let result =
-        assist_rs::assist_propagate(&ephem, &orbit, &[60030.0], true).unwrap();
+    let result = assist_rs::assist_propagate(&ephem, &orbit, &[60030.0], true).unwrap();
     assert!(result[0].stm.is_some());
     assert!(
         result[0].nongrav_partials.is_none(),

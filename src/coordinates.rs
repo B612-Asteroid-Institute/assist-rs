@@ -265,8 +265,7 @@ mod tests {
         let mut d = plus[k] - minus[k];
         // Handle RA wrap: keep difference in (-π, π].
         if k == 1 {
-            d = (d + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
-                - std::f64::consts::PI;
+            d = (d + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI;
         }
         d / (2.0 * h)
     }

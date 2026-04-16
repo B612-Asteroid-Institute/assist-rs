@@ -23,6 +23,95 @@ pub struct PropagatedState {
     pub nongrav_partials: Option<[[f64; 3]; 6]>,
 }
 
+impl PropagatedState {
+    /// Linearly propagate a 6×6 initial-state covariance to this epoch:
+    ///
+    /// ```text
+    ///   P(t) = Φ · P₀ · Φᵀ
+    /// ```
+    ///
+    /// where `Φ` is `self.stm`. Returns `None` when `stm` is not populated
+    /// (i.e., the orbit was propagated with `compute_stm = false`).
+    ///
+    /// The input and output covariances are in heliocentric ecliptic J2000,
+    /// matching the frame of `state` and `stm`.
+    pub fn propagate_covariance(&self, p0: &[[f64; 6]; 6]) -> Option<[[f64; 6]; 6]> {
+        self.stm.as_ref().map(|stm| covariance_6x6(stm, p0))
+    }
+
+    /// Linearly propagate a 9×9 initial covariance over
+    /// `(x, y, z, vx, vy, vz, A1, A2, A3)` to the 6×6 state covariance at this
+    /// epoch:
+    ///
+    /// ```text
+    ///   J = [ Φ | G ]         (6×9, Φ = stm, G = nongrav_partials)
+    ///   P(t) = J · P₀ · Jᵀ
+    /// ```
+    ///
+    /// Returns `None` unless both `stm` and `nongrav_partials` are populated
+    /// (i.e., the orbit has non-gravitational parameters and was propagated
+    /// with `compute_stm = true`).
+    pub fn propagate_covariance_with_nongrav(&self, p0: &[[f64; 9]; 9]) -> Option<[[f64; 6]; 6]> {
+        let stm = self.stm.as_ref()?;
+        let ng = self.nongrav_partials.as_ref()?;
+        Some(covariance_9x9(stm, ng, p0))
+    }
+}
+
+/// P = Φ · P₀ · Φᵀ, where Φ and P₀ are 6×6 (row-major).
+fn covariance_6x6(stm: &[[f64; 6]; 6], p0: &[[f64; 6]; 6]) -> [[f64; 6]; 6] {
+    let mut tmp = [[0.0f64; 6]; 6];
+    for i in 0..6 {
+        for j in 0..6 {
+            let mut s = 0.0;
+            for k in 0..6 {
+                s += stm[i][k] * p0[k][j];
+            }
+            tmp[i][j] = s;
+        }
+    }
+    let mut out = [[0.0f64; 6]; 6];
+    for i in 0..6 {
+        for j in 0..6 {
+            let mut s = 0.0;
+            for k in 0..6 {
+                // stm[j][k] is (Φᵀ)[k][j]
+                s += tmp[i][k] * stm[j][k];
+            }
+            out[i][j] = s;
+        }
+    }
+    out
+}
+
+/// P = J · P₀ · Jᵀ, where J = [stm | ng] is 6×9 (stm 6×6, ng 6×3) and P₀ is 9×9.
+fn covariance_9x9(stm: &[[f64; 6]; 6], ng: &[[f64; 3]; 6], p0: &[[f64; 9]; 9]) -> [[f64; 6]; 6] {
+    let j = |i: usize, k: usize| -> f64 { if k < 6 { stm[i][k] } else { ng[i][k - 6] } };
+    // tmp = J · P₀  (6×9)
+    let mut tmp = [[0.0f64; 9]; 6];
+    for i in 0..6 {
+        for col in 0..9 {
+            let mut s = 0.0;
+            for k in 0..9 {
+                s += j(i, k) * p0[k][col];
+            }
+            tmp[i][col] = s;
+        }
+    }
+    // out = tmp · Jᵀ  (6×6)
+    let mut out = [[0.0f64; 6]; 6];
+    for i in 0..6 {
+        for col in 0..6 {
+            let mut s = 0.0;
+            for k in 0..9 {
+                s += tmp[i][k] * j(col, k);
+            }
+            out[i][col] = s;
+        }
+    }
+    out
+}
+
 /// Propagate a test particle from an initial heliocentric ecliptic J2000 orbit.
 ///
 /// # Arguments
@@ -264,4 +353,233 @@ pub fn assist_propagate(
 /// ASSIST time = JD - jd_ref, where JD = MJD + 2400000.5.
 fn mjd_to_assist_time(mjd_tdb: f64, jd_ref: f64) -> f64 {
     (mjd_tdb + 2_400_000.5) - jd_ref
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn identity6() -> [[f64; 6]; 6] {
+        let mut m = [[0.0; 6]; 6];
+        for i in 0..6 {
+            m[i][i] = 1.0;
+        }
+        m
+    }
+
+    fn identity9() -> [[f64; 9]; 9] {
+        let mut m = [[0.0; 9]; 9];
+        for i in 0..9 {
+            m[i][i] = 1.0;
+        }
+        m
+    }
+
+    /// A non-trivial "STM-like" 6×6: entries chosen so both rotation and
+    /// scaling happen, and it's not symmetric.
+    fn sample_stm() -> [[f64; 6]; 6] {
+        [
+            [1.0, 0.0, 0.0, 30.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0, 30.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0, 0.0, 30.0],
+            [0.0001, 0.0, 0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0001, 0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0001, 0.0, 0.0, 1.0],
+        ]
+    }
+
+    fn max_abs_diff_6x6(a: &[[f64; 6]; 6], b: &[[f64; 6]; 6]) -> f64 {
+        let mut m: f64 = 0.0;
+        for i in 0..6 {
+            for j in 0..6 {
+                m = m.max((a[i][j] - b[i][j]).abs());
+            }
+        }
+        m
+    }
+
+    #[test]
+    fn covariance_6x6_identity_p0() {
+        // With P₀ = I: P(t) = Φ · Φᵀ (manually checkable).
+        let stm = sample_stm();
+        let got = covariance_6x6(&stm, &identity6());
+        // Build the reference Φ · Φᵀ by hand.
+        let mut want = [[0.0f64; 6]; 6];
+        for i in 0..6 {
+            for j in 0..6 {
+                let mut s = 0.0;
+                for k in 0..6 {
+                    s += stm[i][k] * stm[j][k];
+                }
+                want[i][j] = s;
+            }
+        }
+        assert!(max_abs_diff_6x6(&got, &want) < 1e-14);
+        // Result is symmetric.
+        for i in 0..6 {
+            for j in 0..6 {
+                assert!((got[i][j] - got[j][i]).abs() < 1e-14);
+            }
+        }
+    }
+
+    #[test]
+    fn covariance_6x6_zero_stm_is_zero() {
+        let stm = [[0.0f64; 6]; 6];
+        let p0 = identity6();
+        let got = covariance_6x6(&stm, &p0);
+        for i in 0..6 {
+            for j in 0..6 {
+                assert_eq!(got[i][j], 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn propagate_covariance_method_wraps_helper() {
+        let state = PropagatedState {
+            state: [0.0; 6],
+            epoch: 0.0,
+            stm: Some(sample_stm()),
+            nongrav_partials: None,
+        };
+        let p0 = identity6();
+        let via_method = state.propagate_covariance(&p0).unwrap();
+        let via_helper = covariance_6x6(state.stm.as_ref().unwrap(), &p0);
+        assert!(max_abs_diff_6x6(&via_method, &via_helper) < 1e-14);
+    }
+
+    #[test]
+    fn propagate_covariance_none_when_no_stm() {
+        let state = PropagatedState {
+            state: [0.0; 6],
+            epoch: 0.0,
+            stm: None,
+            nongrav_partials: None,
+        };
+        assert!(state.propagate_covariance(&identity6()).is_none());
+    }
+
+    #[test]
+    fn covariance_9x9_reduces_to_6x6_when_nongrav_block_is_zero() {
+        // If the 9×9 P₀ has only the upper-left 6×6 block populated and the
+        // A-parameter block is zero, the result must equal the 6×6
+        // propagation.
+        let stm = sample_stm();
+        let ng: [[f64; 3]; 6] = [
+            [1e-3, 2e-3, -1e-3],
+            [0.0, 1e-3, 0.0],
+            [0.0, 0.0, 1e-3],
+            [1e-5, 0.0, 0.0],
+            [0.0, 1e-5, 0.0],
+            [0.0, 0.0, 1e-5],
+        ];
+
+        // Build a P₀ with P_xx = diag(0.1, 0.1, 0.1, 1e-4, 1e-4, 1e-4) and
+        // zero everywhere else.
+        let p_xx = {
+            let mut m = [[0.0; 6]; 6];
+            for (i, v) in [0.1, 0.1, 0.1, 1e-4, 1e-4, 1e-4].iter().enumerate() {
+                m[i][i] = *v;
+            }
+            m
+        };
+        let mut p0_9 = [[0.0; 9]; 9];
+        for i in 0..6 {
+            for j in 0..6 {
+                p0_9[i][j] = p_xx[i][j];
+            }
+        }
+
+        let got = covariance_9x9(&stm, &ng, &p0_9);
+        let want = covariance_6x6(&stm, &p_xx);
+        assert!(
+            max_abs_diff_6x6(&got, &want) < 1e-14,
+            "9×9 with zero A-block should match 6×6 path; diff={:.3e}",
+            max_abs_diff_6x6(&got, &want)
+        );
+    }
+
+    #[test]
+    fn covariance_9x9_picks_up_pure_nongrav_covariance() {
+        // If only the lower-right 3×3 A-block of P₀ is non-zero, the result
+        // must equal G · P_AA · Gᵀ.
+        let stm = sample_stm();
+        let ng: [[f64; 3]; 6] = [
+            [10.0, 5.0, 2.0],
+            [3.0, 8.0, 1.0],
+            [1.0, 2.0, 6.0],
+            [0.1, 0.05, 0.02],
+            [0.03, 0.08, 0.01],
+            [0.01, 0.02, 0.06],
+        ];
+        let p_aa = [[1.0, 0.2, 0.1], [0.2, 1.0, 0.3], [0.1, 0.3, 1.0]];
+        let mut p0_9 = [[0.0; 9]; 9];
+        for i in 0..3 {
+            for j in 0..3 {
+                p0_9[6 + i][6 + j] = p_aa[i][j];
+            }
+        }
+
+        let got = covariance_9x9(&stm, &ng, &p0_9);
+
+        // Expected: G · P_AA · Gᵀ, computed the long way.
+        let mut tmp = [[0.0; 3]; 6]; // G · P_AA
+        for i in 0..6 {
+            for j in 0..3 {
+                let mut s = 0.0;
+                for k in 0..3 {
+                    s += ng[i][k] * p_aa[k][j];
+                }
+                tmp[i][j] = s;
+            }
+        }
+        let mut want = [[0.0; 6]; 6];
+        for i in 0..6 {
+            for j in 0..6 {
+                let mut s = 0.0;
+                for k in 0..3 {
+                    s += tmp[i][k] * ng[j][k];
+                }
+                want[i][j] = s;
+            }
+        }
+        assert!(max_abs_diff_6x6(&got, &want) < 1e-12);
+    }
+
+    #[test]
+    fn covariance_9x9_identity_p0_includes_both_blocks() {
+        // With P₀ = I_9 the result must equal the 6×6 "identity state P₀"
+        // result PLUS the pure-nongrav contribution. Verifies cross-term
+        // handling doesn't double- or drop-count.
+        let stm = sample_stm();
+        let ng: [[f64; 3]; 6] = [
+            [1.0, 0.5, 0.2],
+            [0.3, 0.8, 0.1],
+            [0.1, 0.2, 0.6],
+            [0.01, 0.005, 0.002],
+            [0.003, 0.008, 0.001],
+            [0.001, 0.002, 0.006],
+        ];
+        let got = covariance_9x9(&stm, &ng, &identity9());
+        let state_part = covariance_6x6(&stm, &identity6());
+        // Pure-nongrav part: G · G^T (since P_AA = I_3)
+        let mut ng_part = [[0.0; 6]; 6];
+        for i in 0..6 {
+            for j in 0..6 {
+                let mut s = 0.0;
+                for k in 0..3 {
+                    s += ng[i][k] * ng[j][k];
+                }
+                ng_part[i][j] = s;
+            }
+        }
+        let mut want = [[0.0; 6]; 6];
+        for i in 0..6 {
+            for j in 0..6 {
+                want[i][j] = state_part[i][j] + ng_part[i][j];
+            }
+        }
+        assert!(max_abs_diff_6x6(&got, &want) < 1e-12);
+    }
 }

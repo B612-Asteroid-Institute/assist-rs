@@ -220,18 +220,12 @@ impl DataManager {
             match local_md5_matches(&path, &meta.md5) {
                 Ok(true) => {}
                 Ok(false) => {
-                    eprintln!(
-                        "Re-downloading {} (local MD5 mismatch)...",
-                        entry.filename
-                    );
+                    eprintln!("Re-downloading {} (local MD5 mismatch)...", entry.filename);
                     download(entry, &path, &meta_path)?;
                     continue;
                 }
                 Err(e) => {
-                    eprintln!(
-                        "Warning: MD5 check failed for {}: {e}",
-                        entry.filename
-                    );
+                    eprintln!("Warning: MD5 check failed for {}: {e}", entry.filename);
                 }
             }
 
@@ -408,7 +402,12 @@ mod tests {
             let path = dir.path().join(format!("case_{i}.bin"));
             fs::write(&path, payload).unwrap();
             let got = compute_md5(&path).unwrap();
-            assert_eq!(got, *expected, "case {i}: {:?}", std::str::from_utf8(payload));
+            assert_eq!(
+                got,
+                *expected,
+                "case {i}: {:?}",
+                std::str::from_utf8(payload)
+            );
         }
     }
 

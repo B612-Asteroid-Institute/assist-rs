@@ -61,6 +61,18 @@ let results = assist_propagate(
 
 `nongrav_partials` is populated only when `compute_stm = true` *and* the orbit carries non-gravitational parameters.
 
+Each result can linearly propagate an initial covariance to its epoch:
+
+```rust
+// 6×6 state covariance → propagated 6×6
+let p_t = results[i].propagate_covariance(&p0_6x6);
+
+// 9×9 over (state, A1, A2, A3) → propagated 6×6 state covariance
+let p_t = results[i].propagate_covariance_with_nongrav(&p0_9x9);
+```
+
+Both return `None` when the required partials are absent.
+
 ### `assist_get_state`
 
 Query the state of any solar system body or ground observatory at one or more epochs.
