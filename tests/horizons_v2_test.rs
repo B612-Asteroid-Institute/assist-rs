@@ -201,9 +201,8 @@ fn angular_separation_rad(ra1: f64, dec1: f64, ra2: f64, dec2: f64) -> f64 {
     let (sin_d2, cos_d2) = dec2.sin_cos();
     let dra = ra1 - ra2;
     let (sin_dra, cos_dra) = dra.sin_cos();
-    let num = ((cos_d2 * sin_dra).powi(2)
-        + (cos_d1 * sin_d2 - sin_d1 * cos_d2 * cos_dra).powi(2))
-    .sqrt();
+    let num =
+        ((cos_d2 * sin_dra).powi(2) + (cos_d1 * sin_d2 - sin_d1 * cos_d2 * cos_dra).powi(2)).sqrt();
     let den = sin_d1 * sin_d2 + cos_d1 * cos_d2 * cos_dra;
     num.atan2(den)
 }
@@ -220,8 +219,8 @@ fn test_propagation_against_horizons() {
         eprintln!("Skipping: validation/horizons_reference_v2.json not found");
         return;
     };
-    let ephem = assist_rs::Ephemeris::from_paths(&planets, &asteroids)
-        .expect("Failed to load ephemeris");
+    let ephem =
+        assist_rs::Ephemeris::from_paths(&planets, &asteroids).expect("Failed to load ephemeris");
 
     eprintln!(
         "Propagation test: {} orbits, dt = {:?} days",
@@ -239,8 +238,7 @@ fn test_propagation_against_horizons() {
             let epoch_mjd = jd_to_mjd(entry.sbdb_epoch_jd_tdb);
             let ic = &entry.vectors_bary_eq[0];
             let ic_arr = [ic.x, ic.y, ic.z, ic.vx, ic.vy, ic.vz];
-            let orbit =
-                build_orbit(&ic_arr, epoch_mjd, entry.non_grav.as_ref(), &ephem);
+            let orbit = build_orbit(&ic_arr, epoch_mjd, entry.non_grav.as_ref(), &ephem);
 
             let target_epochs: Vec<f64> = entry
                 .vectors_bary_eq
@@ -248,16 +246,12 @@ fn test_propagation_against_horizons() {
                 .map(|v| jd_to_mjd(v.jd_tdb))
                 .collect();
 
-            let propagated =
-                assist_rs::assist_propagate(&ephem, &orbit, &target_epochs, false)
-                    .unwrap_or_else(|e| {
-                        panic!("Propagation failed for {}: {e}", entry.object_id)
-                    });
+            let propagated = assist_rs::assist_propagate(&ephem, &orbit, &target_epochs, false)
+                .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", entry.object_id));
 
             let mut rows: Vec<(f64, f64, f64)> = Vec::new(); // (dt, pos_err_m, vel_err_m_s)
             for (prop, href) in propagated.iter().zip(entry.vectors_bary_eq.iter()) {
-                let bary_eq =
-                    helio_ecl_to_bary_eq(&prop.state, &ephem, jd_to_mjd(href.jd_tdb));
+                let bary_eq = helio_ecl_to_bary_eq(&prop.state, &ephem, jd_to_mjd(href.jd_tdb));
                 let dp = [
                     bary_eq[0] - href.x,
                     bary_eq[1] - href.y,
@@ -268,11 +262,9 @@ fn test_propagation_against_horizons() {
                     bary_eq[4] - href.vy,
                     bary_eq[5] - href.vz,
                 ];
-                let pos_m =
-                    (dp[0] * dp[0] + dp[1] * dp[1] + dp[2] * dp[2]).sqrt() * AU_M;
-                let vel_ms = (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt()
-                    * AU_M
-                    / 86_400.0;
+                let pos_m = (dp[0] * dp[0] + dp[1] * dp[1] + dp[2] * dp[2]).sqrt() * AU_M;
+                let vel_ms =
+                    (dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]).sqrt() * AU_M / 86_400.0;
                 let dt = href.jd_tdb - entry.sbdb_epoch_jd_tdb;
                 rows.push((dt, pos_m, vel_ms));
             }
@@ -351,10 +343,7 @@ fn test_ephemeris_against_horizons_v2() {
         assist_rs::ObservatoryTable::from_json(&obscodes).expect("Failed to load obs table");
     let obs_table = match load_earth_orientation() {
         Some(eo) => {
-            eprintln!(
-                "Earth orientation loaded ({} segments)",
-                eo.segment_count()
-            );
+            eprintln!("Earth orientation loaded ({} segments)", eo.segment_count());
             obs_table.with_earth_orientation(eo)
         }
         None => {
@@ -363,8 +352,8 @@ fn test_ephemeris_against_horizons_v2() {
         }
     };
 
-    let ephem = assist_rs::Ephemeris::from_paths(&planets, &asteroids)
-        .expect("Failed to load ephemeris");
+    let ephem =
+        assist_rs::Ephemeris::from_paths(&planets, &asteroids).expect("Failed to load ephemeris");
 
     let c_au_day = ephem.c_au_per_day();
     let rad_to_mas = 180.0 / std::f64::consts::PI * 3600.0 * 1000.0;
@@ -397,8 +386,7 @@ fn test_ephemeris_against_horizons_v2() {
             let epoch_mjd = jd_to_mjd(entry.sbdb_epoch_jd_tdb);
             let ic = &entry.vectors_bary_eq[0];
             let ic_arr = [ic.x, ic.y, ic.z, ic.vx, ic.vy, ic.vz];
-            let orbit =
-                build_orbit(&ic_arr, epoch_mjd, entry.non_grav.as_ref(), &ephem);
+            let orbit = build_orbit(&ic_arr, epoch_mjd, entry.non_grav.as_ref(), &ephem);
 
             let horizons_obs = entry
                 .observer_ephemeris
@@ -415,18 +403,14 @@ fn test_ephemeris_against_horizons_v2() {
                 })
                 .collect();
 
-            let predicted = assist_rs::assist_generate_ephemeris(
-                &ephem,
-                &orbit,
-                &observers,
-                Some(&obs_table),
-            )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Ephemeris failed for {} @ {}: {e}",
-                    entry.object_id, obs_code
-                )
-            });
+            let predicted =
+                assist_rs::assist_generate_ephemeris(&ephem, &orbit, &observers, Some(&obs_table))
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "Ephemeris failed for {} @ {}: {e}",
+                            entry.object_id, obs_code
+                        )
+                    });
 
             let mut rows = Vec::new();
             for (pr, href) in predicted.iter().zip(horizons_obs.iter()) {
@@ -437,7 +421,8 @@ fn test_ephemeris_against_horizons_v2() {
                 let dec_rust = pr.spherical[2];
                 let ra_hor = href.ra_deg.to_radians();
                 let dec_hor = href.dec_deg.to_radians();
-                let sep_mas = angular_separation_rad(ra_rust, dec_rust, ra_hor, dec_hor) * rad_to_mas;
+                let sep_mas =
+                    angular_separation_rad(ra_rust, dec_rust, ra_hor, dec_hor) * rad_to_mas;
 
                 // Range (delta)
                 let delta_rust_au = pr.spherical[0];
@@ -461,8 +446,13 @@ fn test_ephemeris_against_horizons_v2() {
                 let lt_err_us = (lt_ours_days - lt_horizons_days).abs() * day_to_us;
 
                 rows.push(EphemRow {
-                    dt, sep_mas, delta_err_m, deldot_err_m_s,
-                    dra_err_mas_hr, ddec_err_mas_hr, lt_err_us,
+                    dt,
+                    sep_mas,
+                    delta_err_m,
+                    deldot_err_m_s,
+                    dra_err_mas_hr,
+                    ddec_err_mas_hr,
+                    lt_err_us,
                 });
             }
             (entry.object_id.clone(), (*obs_code).clone(), rows)
@@ -491,7 +481,15 @@ fn test_ephemeris_against_horizons_v2() {
     let mut any_fail = false;
     eprintln!(
         "\n{:<36} {:<4} {:>4} {:>10} {:>10} {:>10} {:>10} {:>10} {:>10}",
-        "object", "obs", "dt", "sep_mas", "delta_m", "deldot_m/s", "dRA_mas/h", "dDec_mas/h", "lt_us"
+        "object",
+        "obs",
+        "dt",
+        "sep_mas",
+        "delta_m",
+        "deldot_m/s",
+        "dRA_mas/h",
+        "dDec_mas/h",
+        "lt_us"
     );
     for (name, obs, rows) in &results {
         for row in rows {
@@ -504,9 +502,16 @@ fn test_ephemeris_against_horizons_v2() {
             let flag = if ok { " " } else { "!" };
             eprintln!(
                 "{}{:<35} {:<4} {:>4.0} {:>10.4} {:>10.3} {:>10.4} {:>10.2} {:>10.2} {:>10.4}",
-                flag, name, obs, row.dt,
-                row.sep_mas, row.delta_err_m, row.deldot_err_m_s,
-                row.dra_err_mas_hr, row.ddec_err_mas_hr, row.lt_err_us,
+                flag,
+                name,
+                obs,
+                row.dt,
+                row.sep_mas,
+                row.delta_err_m,
+                row.deldot_err_m_s,
+                row.dra_err_mas_hr,
+                row.ddec_err_mas_hr,
+                row.lt_err_us,
             );
             if !ok {
                 any_fail = true;
@@ -516,4 +521,3 @@ fn test_ephemeris_against_horizons_v2() {
 
     assert!(!any_fail, "Some ephemeris residuals exceeded tolerances");
 }
-
