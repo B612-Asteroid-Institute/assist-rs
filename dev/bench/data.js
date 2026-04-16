@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776360331091,
+  "lastUpdate": 1776362631507,
   "repoUrl": "https://github.com/B612-Asteroid-Institute/assist-rs",
   "entries": {
     "assist-rs Benchmarks": [
@@ -239,6 +239,126 @@ window.BENCHMARK_DATA = {
             "name": "duration_scaling/days/365",
             "value": 1444493,
             "range": "± 42820",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "moeyensj@gmail.com",
+            "name": "Joachim Moeyens",
+            "username": "moeyensj"
+          },
+          "committer": {
+            "email": "moeyensj@gmail.com",
+            "name": "Joachim Moeyens",
+            "username": "moeyensj"
+          },
+          "distinct": true,
+          "id": "7dd7336388f3b64a56d9f8ff39602c083bd56132",
+          "message": "CI: use B612 data packages for observatory codes and EOP kernels\n\nThe Test job already installs naif-de440 and jpl-small-bodies-de441-n16\nfrom B612's PyPI, but the Horizons v2 test falls back to downloading\nMPC obscodes and NAIF EOP kernels over HTTP at test time. That's slow,\nnetwork-dependent, and couples CI correctness to upstream uptime.\n\nInstall the remaining B612-published data packages and point the test\nloaders at them via env vars (MPC_OBSCODES_PATH, ASSIST_EOP_*):\n\n  - mpc-obscodes           → obscodes_extended.json\n  - naif-eop-high-prec     → earth_latest_high_prec.bpc\n  - naif-eop-historical    → earth_620120_240827.bpc\n  - naif-eop-predict       → earth_200101_990827_predict.bpc\n\nThe test-side loader (added in the previous commit) already honors\nthese env vars and falls back to ASSIST_DATA_DIR for local dev, so\nnothing else needs to change.\n\nBenchmark job doesn't need the observatory or EOP kernels — propagation\nbenches only touch planetary + asteroid ephemerides — so it's left\nalone.\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-04-16T10:57:56-07:00",
+          "tree_id": "baaa81f726daddfcaa3a6ed7232bd9e3bec9e87f",
+          "url": "https://github.com/B612-Asteroid-Institute/assist-rs/commit/7dd7336388f3b64a56d9f8ff39602c083bd56132"
+        },
+        "date": 1776362630786,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "propagate_single/rust_api/1",
+            "value": 521846,
+            "range": "± 16423",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_single/rust_api/10",
+            "value": 1376536,
+            "range": "± 27055",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_single/rust_api/100",
+            "value": 10556608,
+            "range": "± 288570",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_stm/without_stm",
+            "value": 522696,
+            "range": "± 2208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_stm/with_stm",
+            "value": 1161451,
+            "range": "± 28737",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_nongrav/gravity_only",
+            "value": 524598,
+            "range": "± 1703",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_nongrav/with_a2",
+            "value": 574005,
+            "range": "± 2749",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rust_vs_raw_c/rust_api",
+            "value": 527440,
+            "range": "± 1980",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rust_vs_raw_c/raw_c_ffi",
+            "value": 526618,
+            "range": "± 2155",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel/serial_28_orbits",
+            "value": 14898516,
+            "range": "± 360922",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel/rayon_28_orbits",
+            "value": 11436529,
+            "range": "± 64921",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/1",
+            "value": 370756,
+            "range": "± 2346",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/10",
+            "value": 468775,
+            "range": "± 3557",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/30",
+            "value": 526475,
+            "range": "± 12630",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/100",
+            "value": 783665,
+            "range": "± 22737",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/365",
+            "value": 1521234,
+            "range": "± 35369",
             "unit": "ns/iter"
           }
         ]
