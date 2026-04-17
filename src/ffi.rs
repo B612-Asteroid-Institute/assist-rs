@@ -162,6 +162,11 @@ unsafe extern "C" {
         r: *mut reb_simulation,
         testparticle: c_int,
     ) -> c_int;
+
+    // Integrator reset: frees IAS15 scratch arrays (b/e/br/er/csb/csx/csv/csa0
+    // plus g/x0/v0/a0/at/map). Required between orbit reuses to clear
+    // cross-orbit carryover in the compensated-summation and predictor state.
+    pub fn reb_integrator_ias15_reset(r: *mut reb_simulation);
 }
 
 // ---------------------------------------------------------------------------

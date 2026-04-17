@@ -22,7 +22,7 @@ pub mod ephemeris;
 mod observatory;
 mod orbit;
 mod origin;
-mod propagate;
+pub mod propagate;
 mod state;
 
 pub use coordinates::{ecliptic_to_equatorial, equatorial_to_ecliptic};
@@ -30,7 +30,7 @@ pub use ephemeris::{EphemerisResult, Observer, assist_generate_ephemeris};
 pub use observatory::ObservatoryTable;
 pub use orbit::{NonGravParams, Orbit};
 pub use origin::Origin;
-pub use propagate::{PropagatedState, assist_propagate};
+pub use propagate::{PropagatedState, PropagatorConfig, PropagatorPool, assist_propagate};
 pub use state::{BodyState, assist_get_state};
 
 /// Error type for assist-rs operations.

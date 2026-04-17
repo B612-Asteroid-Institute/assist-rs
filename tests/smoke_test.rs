@@ -507,3 +507,240 @@ fn test_nongrav_partials_absent_without_nongrav() {
         "nongrav_partials should be None for gravity-only orbit"
     );
 }
+
+// ─── PropagatorPool tests ──────────────────────────────────────────────────
+
+const CERES_STATE: [f64; 6] = [
+    -1.938_169_72,
+    2.289_213_79,
+    1.094_048_30,
+    -0.008_744_54,
+    -0.005_523_16,
+    0.001_174_22,
+];
+const PALLAS_STATE: [f64; 6] = [
+    -1.125_891_41,
+    -2.430_188_55,
+    -0.611_372_24,
+    0.009_203_58,
+    -0.003_941_27,
+    -0.002_068_19,
+];
+const JUNO_STATE: [f64; 6] = [
+    2.123_441_10,
+    -1.321_907_43,
+    -0.657_224_91,
+    0.005_472_36,
+    0.009_103_18,
+    0.003_482_05,
+];
+
+fn state_max_diff(a: &[f64; 6], b: &[f64; 6]) -> f64 {
+    (0..6).map(|i| (a[i] - b[i]).abs()).fold(0.0f64, f64::max)
+}
+
+fn matrix_max_diff(a: &[[f64; 6]; 6], b: &[[f64; 6]; 6]) -> f64 {
+    let mut m = 0.0f64;
+    for i in 0..6 {
+        for j in 0..6 {
+            m = m.max((a[i][j] - b[i][j]).abs());
+        }
+    }
+    m
+}
+
+#[test]
+fn test_pool_matches_assist_propagate_gravity_only() {
+    // A pool propagating the same orbit as assist_propagate must produce
+    // the identical state (integrator is deterministic with fresh scratch
+    // arrays). Tolerance is 1 ULP-ish — rebuilding sim vs reusing sim
+    // should not change the IAS15 step sequence at all.
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
+    let targets = [60030.0, 60090.0];
+
+    let reference = assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap();
+
+    let mut pool =
+        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::gravity_only())
+            .unwrap();
+    let pooled = pool.propagate(&orbit, &targets).unwrap();
+
+    assert_eq!(reference.len(), pooled.len());
+    for (r, p) in reference.iter().zip(&pooled) {
+        let d = state_max_diff(&r.state, &p.state);
+        assert_eq!(d, 0.0, "pool vs free-fn state diff = {d:.3e}");
+    }
+}
+
+#[test]
+fn test_pool_matches_assist_propagate_with_stm() {
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
+    let targets = [60030.0];
+
+    let reference = assist_rs::assist_propagate(&ephem, &orbit, &targets, true).unwrap();
+    let mut pool =
+        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::gravity_with_stm())
+            .unwrap();
+    let pooled = pool.propagate(&orbit, &targets).unwrap();
+
+    assert_eq!(
+        state_max_diff(&reference[0].state, &pooled[0].state),
+        0.0,
+        "state differs"
+    );
+    let diff = matrix_max_diff(
+        reference[0].stm.as_ref().unwrap(),
+        pooled[0].stm.as_ref().unwrap(),
+    );
+    assert_eq!(diff, 0.0, "STM differs");
+}
+
+#[test]
+fn test_pool_reuse_across_different_orbits() {
+    // Propagating three different orbits through the same pool must give
+    // results bitwise identical to running assist_propagate on each
+    // independently. This is the core correctness invariant: no state
+    // leaks between calls.
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+
+    let epoch = 60000.0;
+    let targets = [60045.0, 60180.0];
+    let orbits = [
+        assist_rs::Orbit::new(CERES_STATE, epoch),
+        assist_rs::Orbit::new(PALLAS_STATE, epoch),
+        assist_rs::Orbit::new(JUNO_STATE, epoch),
+    ];
+
+    // Independent reference runs.
+    let refs: Vec<Vec<assist_rs::PropagatedState>> = orbits
+        .iter()
+        .map(|o| assist_rs::assist_propagate(&ephem, o, &targets, true).unwrap())
+        .collect();
+
+    // Pooled runs.
+    let mut pool =
+        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::gravity_with_stm())
+            .unwrap();
+    let pooled: Vec<Vec<assist_rs::PropagatedState>> = orbits
+        .iter()
+        .map(|o| pool.propagate(o, &targets).unwrap())
+        .collect();
+
+    for (orbit_idx, (ref_set, pool_set)) in refs.iter().zip(&pooled).enumerate() {
+        for (ep_idx, (r, p)) in ref_set.iter().zip(pool_set).enumerate() {
+            assert_eq!(
+                state_max_diff(&r.state, &p.state),
+                0.0,
+                "orbit {orbit_idx} epoch {ep_idx}: state differs"
+            );
+            assert_eq!(
+                matrix_max_diff(r.stm.as_ref().unwrap(), p.stm.as_ref().unwrap()),
+                0.0,
+                "orbit {orbit_idx} epoch {ep_idx}: STM differs"
+            );
+        }
+    }
+
+    // Propagate the first orbit again — same orbit, different round through
+    // the pool. Must still match.
+    let repeat = pool.propagate(&orbits[0], &targets).unwrap();
+    for (r, p) in refs[0].iter().zip(&repeat) {
+        assert_eq!(
+            state_max_diff(&r.state, &p.state),
+            0.0,
+            "repeat: state differs"
+        );
+    }
+}
+
+#[test]
+fn test_pool_with_nongrav_partials() {
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let ng = assist_rs::NonGravParams::new(2e-10, 1e-10, -5e-11);
+    let orbit = assist_rs::Orbit::with_non_grav(CERES_STATE, 60000.0, ng);
+    let targets = [60030.0];
+
+    let reference = assist_rs::assist_propagate(&ephem, &orbit, &targets, true).unwrap();
+    let mut pool =
+        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::nongrav_with_stm())
+            .unwrap();
+    let pooled = pool.propagate(&orbit, &targets).unwrap();
+
+    assert_eq!(
+        state_max_diff(&reference[0].state, &pooled[0].state),
+        0.0,
+        "state differs"
+    );
+    let stm_diff = matrix_max_diff(
+        reference[0].stm.as_ref().unwrap(),
+        pooled[0].stm.as_ref().unwrap(),
+    );
+    assert_eq!(stm_diff, 0.0, "STM differs");
+    // Non-grav partials matrix is 6x3, not 6x6 — manual diff.
+    let ng_ref = reference[0].nongrav_partials.as_ref().unwrap();
+    let ng_pool = pooled[0].nongrav_partials.as_ref().unwrap();
+    for i in 0..6 {
+        for j in 0..3 {
+            assert_eq!(ng_ref[i][j], ng_pool[i][j], "nongrav[{i}][{j}] differs");
+        }
+    }
+}
+
+#[test]
+fn test_pool_rejects_orbit_with_wrong_nongrav_flag() {
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+
+    // Gravity-only pool, but we hand it an orbit that carries non-grav params.
+    let mut grav_pool =
+        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::gravity_with_stm())
+            .unwrap();
+    let ng = assist_rs::NonGravParams::new(1e-10, 0.0, 0.0);
+    let orbit_ng = assist_rs::Orbit::with_non_grav(CERES_STATE, 60000.0, ng);
+    let err = grav_pool.propagate(&orbit_ng, &[60030.0]).unwrap_err();
+    assert!(
+        matches!(err, assist_rs::Error::Other(ref s) if s.contains("non-grav flag")),
+        "expected config-mismatch error, got {err:?}"
+    );
+
+    // And the reverse: non-grav pool, gravity-only orbit.
+    let mut ng_pool =
+        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::nongrav_with_stm())
+            .unwrap();
+    let orbit_grav = assist_rs::Orbit::new(CERES_STATE, 60000.0);
+    let err = ng_pool.propagate(&orbit_grav, &[60030.0]).unwrap_err();
+    assert!(
+        matches!(err, assist_rs::Error::Other(ref s) if s.contains("non-grav flag")),
+        "expected config-mismatch error, got {err:?}"
+    );
+}
+
+#[test]
+fn test_pool_empty_target_list() {
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let mut pool =
+        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::gravity_only())
+            .unwrap();
+    let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
+    let result = pool.propagate(&orbit, &[]).unwrap();
+    assert!(result.is_empty());
+}
