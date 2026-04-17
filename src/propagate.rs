@@ -175,6 +175,56 @@ pub fn assist_propagate(
     )
 }
 
+/// Propagate many orbits to a shared set of target epochs.
+///
+/// Shape: the returned `Vec<Vec<PropagatedState>>` is indexed
+/// `[orbit_index][target_epoch_index]`.
+///
+/// # Parallelism
+///
+/// When the `parallel` feature is enabled (default), this uses rayon's
+/// work-stealing pool to propagate independent orbits across available
+/// CPU cores. Each orbit still pays its own [`assist_propagate`] setup
+/// cost (~1 µs of `reb_simulation_create` + `assist_attach`); the win
+/// is the embarrassingly-parallel map across orbits, not amortization
+/// inside a single orbit.
+///
+/// Without the `parallel` feature, this falls back to a serial loop —
+/// equivalent to `orbits.iter().map(|o| assist_propagate(...)).collect()`
+/// but bundled into one function so callers don't have to reason about
+/// error propagation themselves.
+///
+/// `Ephemeris` is `Send + Sync` (data is read-only after construction),
+/// so one ephemeris can serve all worker threads.
+///
+/// # Arguments
+/// Same as [`assist_propagate`] except `orbits` is a slice.
+///
+/// # Errors
+/// Returns the first error encountered across any orbit's propagation.
+pub fn assist_propagate_batch(
+    ephem: &Ephemeris,
+    orbits: &[Orbit],
+    target_epochs: &[f64],
+    compute_stm: bool,
+) -> Result<Vec<Vec<PropagatedState>>> {
+    #[cfg(feature = "parallel")]
+    {
+        use rayon::prelude::*;
+        orbits
+            .par_iter()
+            .map(|orbit| assist_propagate(ephem, orbit, target_epochs, compute_stm))
+            .collect()
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        orbits
+            .iter()
+            .map(|orbit| assist_propagate(ephem, orbit, target_epochs, compute_stm))
+            .collect()
+    }
+}
+
 // ─── PropagatorPool: reusable simulation for many-orbit workloads ───────────
 
 /// Configuration locked at [`PropagatorPool`] construction. A single pool can

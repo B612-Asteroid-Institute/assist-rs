@@ -30,7 +30,9 @@ pub use ephemeris::{EphemerisResult, Observer, assist_generate_ephemeris};
 pub use observatory::ObservatoryTable;
 pub use orbit::{NonGravParams, Orbit};
 pub use origin::Origin;
-pub use propagate::{PropagatedState, PropagatorConfig, PropagatorPool, assist_propagate};
+pub use propagate::{
+    PropagatedState, PropagatorConfig, PropagatorPool, assist_propagate, assist_propagate_batch,
+};
 pub use state::{BodyState, assist_get_state};
 
 /// Error type for assist-rs operations.

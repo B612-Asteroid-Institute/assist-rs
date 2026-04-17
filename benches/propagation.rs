@@ -361,6 +361,42 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
 // successive light-time iterations.
 // ---------------------------------------------------------------------------
 
+/// Compare the batch API against hand-written serial and rayon loops over
+/// `assist_propagate`. With the `parallel` feature enabled (default), the
+/// batch function internally uses rayon, so it should match the "rayon"
+/// column within noise. The point of this bench is to guarantee the
+/// convenience API doesn't add overhead.
+fn bench_propagate_batch(c: &mut Criterion) {
+    let Some(ephem) = load_ephem() else { return };
+
+    let orbits: Vec<assist_rs::Orbit> = (0..128)
+        .map(|i| {
+            let mut s = CERES_STATE;
+            s[0] += (i as f64) * 1e-6;
+            s[1] += (i as f64) * 1.3e-6;
+            assist_rs::Orbit::new(s, EPOCH)
+        })
+        .collect();
+    let targets = vec![EPOCH + 30.0];
+
+    let mut group = c.benchmark_group("propagate_batch");
+
+    group.bench_function("serial_loop_128", |b| {
+        b.iter(|| {
+            orbits
+                .iter()
+                .map(|o| assist_rs::assist_propagate(&ephem, o, &targets, false).unwrap())
+                .collect::<Vec<_>>()
+        });
+    });
+
+    group.bench_function("batch_api_128", |b| {
+        b.iter(|| assist_rs::assist_propagate_batch(&ephem, &orbits, &targets, false).unwrap());
+    });
+
+    group.finish();
+}
+
 fn bench_generate_ephemeris(c: &mut Criterion) {
     let Some(ephem) = load_ephem() else { return };
 
@@ -389,6 +425,7 @@ criterion_group!(
     bench_parallel_propagation,
     bench_duration_scaling,
     bench_pool_vs_unpooled,
+    bench_propagate_batch,
     bench_generate_ephemeris,
 );
 criterion_main!(benches);
