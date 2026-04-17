@@ -345,6 +345,33 @@ impl AssistSim {
     pub fn integrate(&mut self, tmax: f64) -> Result<()> {
         self.sim.integrate(tmax)
     }
+
+    /// Reset the IAS15 integrator's internal scratch arrays (compensated-
+    /// summation accumulators and predictor state). Required between two
+    /// unrelated orbits integrated on the same simulation; without it,
+    /// `csx`/`csv` would carry ~machine-epsilon-scale error from the prior
+    /// orbit and predictor arrays (`b`/`e`) would seed the new orbit's
+    /// first step with stale values.
+    ///
+    /// Cheap: ~13 small free/realloc pairs for our 1–10 particle count.
+    pub(crate) fn reset_integrator(&mut self) {
+        unsafe { ffi::reb_integrator_ias15_reset(self.sim.ptr) }
+    }
+
+    /// Rewrite the first three slots of the installed `particle_params`
+    /// array (the real test particle's A1, A2, A3) without reallocating.
+    /// Does nothing if no params array has been installed yet.
+    ///
+    /// The variational-particle parameter columns (indices 3 onward) are
+    /// orbit-invariant IC perturbations (identity for parameter
+    /// variationals, zero for state variationals) and are left untouched.
+    pub(crate) fn update_nongrav_coeffs(&mut self, a1: f64, a2: f64, a3: f64) {
+        if let Some(params) = self.particle_params.as_mut() {
+            params[0] = a1;
+            params[1] = a2;
+            params[2] = a3;
+        }
+    }
 }
 
 impl Drop for AssistSim {
