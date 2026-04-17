@@ -4,8 +4,10 @@
 // Rather than reproducing it in Rust, we treat it as opaque and
 // expose only the handful of fields the FFI layer needs.
 
+#include <string.h>
 #include "rebound.h"
 #include "assist.h"
+#include "spk.h"
 
 // --- reb_simulation field accessors ---
 
@@ -14,6 +16,83 @@ void   assist_rs_sim_set_t(struct reb_simulation* r, double t) { r->t = t; }
 
 double assist_rs_sim_get_dt(const struct reb_simulation* r) { return r->dt; }
 void   assist_rs_sim_set_dt(struct reb_simulation* r, double dt) { r->dt = dt; }
+
+unsigned long long assist_rs_sim_get_steps_done(const struct reb_simulation* r) { return r->steps_done; }
+
+// Reset the ephemeris cache to "all slots invalid (-1e306)". Emulates the
+// assist_init cache-initialization behavior between propagations.
+//
+// WHY THIS MATTERS FOR PERFORMANCE: `assist_all_ephem` does a 7-slot LRU on
+// the cache; when cache is fresh (all slots = -1e306), the "find oldest" loop
+// always picks slot 0 (single branch), but when slots are populated with
+// stale-but-realistic t values from a previous propagation, the loop does real
+// comparisons every iteration. Over ~7000 ephem lookups per 30-day Ceres-type
+// integrate, this compounds to ~190 µs of overhead — the full PropagatorPool
+// vs assist_propagate regression. Invalidating the cache between pool
+// propagations restores fresh-sim performance.
+void assist_rs_ephem_cache_reset(struct assist_extras* ax) {
+    if (!ax || !ax->ephem_cache || !ax->ephem_cache->t) return;
+    int N_total = ASSIST_BODY_NPLANETS;
+    if (ax->ephem && ax->ephem->spk_asteroids) {
+        N_total += ax->ephem->spk_asteroids->num;
+    }
+    for (int i = 0; i < 7 * N_total; i++) {
+        ax->ephem_cache->t[i] = -1e306;
+    }
+}
+
+// Zero IAS15's compensated-summation accumulators (csx, csv) and predictor
+// arrays (b, e, br, er, g) in place, leaving their allocations intact. This
+// is equivalent to `reb_integrator_ias15_reset` for correctness — it clears
+// all state that carries across `reb_simulation_integrate` calls — but
+// avoids the 13 free/malloc pairs that reset incurs. Required between
+// propagations of two unrelated orbits that share the same simulation.
+void assist_rs_ias15_zero_state(struct reb_simulation* r) {
+    const int N_allocated = r->ri_ias15.N_allocated;
+    if (N_allocated == 0) { return; }   // never stepped; nothing to zero
+
+    // Compensated-summation accumulators for positions and velocities.
+    memset(r->ri_ias15.csx,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.csv,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.csa0, 0, sizeof(double) * N_allocated);
+
+    // b/e/br/er/g: 7-component tables of length N3 each. Zero all p0..p6.
+    memset(r->ri_ias15.b.p0,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.b.p1,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.b.p2,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.b.p3,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.b.p4,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.b.p5,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.b.p6,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.e.p0,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.e.p1,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.e.p2,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.e.p3,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.e.p4,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.e.p5,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.e.p6,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.br.p0, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.br.p1, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.br.p2, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.br.p3, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.br.p4, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.br.p5, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.br.p6, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.er.p0, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.er.p1, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.er.p2, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.er.p3, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.er.p4, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.er.p5, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.er.p6, 0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.g.p0,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.g.p1,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.g.p2,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.g.p3,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.g.p4,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.g.p5,  0, sizeof(double) * N_allocated);
+    memset(r->ri_ias15.g.p6,  0, sizeof(double) * N_allocated);
+}
 
 unsigned int assist_rs_sim_get_N(const struct reb_simulation* r) { return r->N; }
 int assist_rs_sim_get_N_var(const struct reb_simulation* r) { return r->N_var; }

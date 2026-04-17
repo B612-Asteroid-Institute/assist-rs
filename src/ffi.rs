@@ -210,6 +210,9 @@ unsafe extern "C" {
     pub fn assist_rs_sim_get_dt(r: *const reb_simulation) -> c_double;
     pub fn assist_rs_sim_set_dt(r: *mut reb_simulation, dt: c_double);
     pub fn assist_rs_sim_get_N(r: *const reb_simulation) -> c_uint;
+    pub fn assist_rs_sim_get_steps_done(r: *const reb_simulation) -> u64;
+    pub fn assist_rs_ias15_zero_state(r: *mut reb_simulation);
+    pub fn assist_rs_ephem_cache_reset(ax: *mut assist_extras);
     pub fn assist_rs_sim_get_N_var(r: *const reb_simulation) -> c_int;
     pub fn assist_rs_sim_get_N_active(r: *const reb_simulation) -> c_int;
     pub fn assist_rs_sim_set_N_active(r: *mut reb_simulation, n: c_int);

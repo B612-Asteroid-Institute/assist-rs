@@ -45,6 +45,20 @@ impl Simulation {
         unsafe { ffi::assist_rs_sim_get_N(self.ptr) as usize }
     }
 
+    /// Total IAS15 steps (accepted + rejected) since this simulation was
+    /// created. Useful for diagnosing adaptive-timestep behavior.
+    pub fn steps_done(&self) -> u64 {
+        unsafe { ffi::assist_rs_sim_get_steps_done(self.ptr) }
+    }
+
+    /// Raw mutable pointer to the underlying REBOUND simulation. Intended for
+    /// benchmark probes and low-level FFI workarounds; prefer the safe API
+    /// whenever possible.
+    #[doc(hidden)]
+    pub fn raw_ptr_mut(&mut self) -> *mut ffi::reb_simulation {
+        self.ptr
+    }
+
     pub fn n_var(&self) -> i32 {
         unsafe { ffi::assist_rs_sim_get_N_var(self.ptr) }
     }
@@ -346,16 +360,31 @@ impl AssistSim {
         self.sim.integrate(tmax)
     }
 
-    /// Reset the IAS15 integrator's internal scratch arrays (compensated-
-    /// summation accumulators and predictor state). Required between two
-    /// unrelated orbits integrated on the same simulation; without it,
-    /// `csx`/`csv` would carry ~machine-epsilon-scale error from the prior
-    /// orbit and predictor arrays (`b`/`e`) would seed the new orbit's
-    /// first step with stale values.
+    /// Raw mutable pointer to the underlying REBOUND simulation.
+    /// See [`Simulation::raw_ptr_mut`].
+    #[doc(hidden)]
+    pub fn raw_sim_ptr_mut(&mut self) -> *mut ffi::reb_simulation {
+        self.sim.raw_ptr_mut()
+    }
+
+    /// Zero IAS15's compensated-summation and predictor state (csx, csv,
+    /// csa0, b, e, br, er, g) *in place*, leaving the allocations intact.
+    /// Also invalidates the ASSIST ephemeris-lookup cache (sets every slot's
+    /// `t` to a sentinel so matched-t comparisons miss on the first
+    /// post-reset call). Required between two unrelated orbits integrated on
+    /// the same simulation — otherwise stale b/e predictor state seeds the
+    /// new orbit's first step and causes extra corrector iterations, and a
+    /// populated ephem cache causes per-lookup LRU work that adds up across
+    /// ~7000 lookups per 30-day integrate (≈190 µs regression).
     ///
-    /// Cheap: ~13 small free/realloc pairs for our 1–10 particle count.
+    /// Cheaper than [`reb_integrator_ias15_reset`] (no free/malloc), and
+    /// faster in practice: a pool-style benchmark with this helper matches
+    /// or beats the unpooled free-function path.
     pub(crate) fn reset_integrator(&mut self) {
-        unsafe { ffi::reb_integrator_ias15_reset(self.sim.ptr) }
+        unsafe {
+            ffi::assist_rs_ias15_zero_state(self.sim.ptr);
+            ffi::assist_rs_ephem_cache_reset(self.ax);
+        }
     }
 
     /// Rewrite the first three slots of the installed `particle_params`
