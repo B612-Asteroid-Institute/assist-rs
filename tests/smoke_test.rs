@@ -744,3 +744,46 @@ fn test_pool_empty_target_list() {
     let result = pool.propagate(&orbit, &[]).unwrap();
     assert!(result.is_empty());
 }
+
+#[test]
+fn test_propagate_batch_matches_serial_loop() {
+    // Batch API must produce bit-identical results to a serial loop of
+    // `assist_propagate`. With the `parallel` feature enabled the batch
+    // uses rayon internally; work-stealing order shouldn't change
+    // per-orbit numerical results because each orbit runs its own
+    // AssistSim.
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let orbits = vec![
+        assist_rs::Orbit::new(CERES_STATE, 60000.0),
+        assist_rs::Orbit::new(PALLAS_STATE, 60000.0),
+        assist_rs::Orbit::new(JUNO_STATE, 60000.0),
+    ];
+    let targets = [60030.0, 60090.0, 60365.0];
+
+    let batch = assist_rs::assist_propagate_batch(&ephem, &orbits, &targets, false).unwrap();
+    assert_eq!(batch.len(), orbits.len());
+
+    for (i, orbit) in orbits.iter().enumerate() {
+        let serial = assist_rs::assist_propagate(&ephem, orbit, &targets, false).unwrap();
+        assert_eq!(batch[i].len(), serial.len());
+        for (j, (b, s)) in batch[i].iter().zip(serial.iter()).enumerate() {
+            assert_eq!(
+                b.state, s.state,
+                "orbit {i} target {j}: batch vs serial diverged"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_propagate_batch_empty_orbits() {
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let result = assist_rs::assist_propagate_batch(&ephem, &[], &[60030.0], false).unwrap();
+    assert!(result.is_empty());
+}
