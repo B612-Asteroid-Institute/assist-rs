@@ -176,16 +176,22 @@ let obs_table = obs_table.with_earth_orientation(eo);
 
 ### Automatic data download (optional)
 
-Enable the `data` feature to use `DataManager`, which downloads and caches the required ephemeris and observatory files:
+The `data` feature (on by default) provides `DataManager`, which downloads and caches everything — ephemerides, observatory codes, and Earth orientation PCKs — directly from NAIF / JPL / MPC:
 
 ```rust
 use assist_rs::data::DataManager;
+use assist_rs::earth_orientation::EarthOrientation;
 
 let dm = DataManager::new();           // default: ~/.cache/assist-rs
-let paths = dm.ensure_ready()?;        // downloads if missing
+let paths = dm.ensure_ready()?;        // downloads missing files; re-fetches stale
+
 let ephem = Ephemeris::from_paths(&paths.planets, &paths.asteroids)?;
-let obs_table = ObservatoryTable::from_json(&paths.obscodes)?;
+let eo = EarthOrientation::from_paths(&paths.eop_kernels())?;
+let obs_table = ObservatoryTable::from_json(&paths.obscodes)?
+    .with_earth_orientation(eo);
 ```
+
+`paths.eop_kernels()` returns the three EOP kernel paths in SPICE-idiomatic order (predict, historical, current) so the high-precision kernel wins at epochs it covers.
 
 ## Building
 

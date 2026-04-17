@@ -1,14 +1,18 @@
 //! Data file management for ASSIST.
 //!
-//! ASSIST needs three files to run end-to-end:
+//! ASSIST needs three kinds of files to run end-to-end:
 //!
-//! 1. `de440.bsp` — NAIF DE440 planetary ephemeris SPK
-//! 2. `sb441-n16.bsp` — JPL SB441 N=16 small-body perturber ephemeris
-//! 3. `obscodes_extended.json` — MPC observatory codes (for observer lookups)
+//! 1. Planetary + asteroid ephemerides (`de440.bsp`, `sb441-n16.bsp`)
+//! 2. MPC observatory codes (`obscodes_extended.json`) for observer lookups
+//! 3. Earth orientation binary PCK kernels (`earth_*.bpc`) for sub-mas
+//!    ITRF93 → ICRF rotation of ground-based observatories. Three kernels
+//!    together span 1962 → ~2125: historical, current high-precision, and
+//!    long-term predict.
 //!
 //! [`DataManager`] downloads these to a local cache directory on demand and
-//! returns resolved paths for [`crate::Ephemeris::from_paths`] and
-//! [`crate::ObservatoryTable::from_json`].
+//! returns resolved paths for [`crate::Ephemeris::from_paths`],
+//! [`crate::ObservatoryTable::from_json`], and
+//! [`crate::earth_orientation::EarthOrientation::from_paths`].
 //!
 //! # Default data directory
 //!
@@ -27,7 +31,9 @@
 //!
 //! Each downloaded file gets a `<filename>.meta.json` sidecar with MD5 hash,
 //! Content-Length, and Last-Modified from the HTTP response. On subsequent
-//! runs, non-static files are checked via HEAD and re-downloaded if changed.
+//! runs, non-static files (the MPC obscodes file and
+//! `earth_latest_high_prec.bpc`) are checked via HEAD and re-downloaded if
+//! the MD5 doesn't match or the remote metadata differs.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -64,6 +70,28 @@ const DEFAULT_KERNELS: &[KernelEntry] = &[
         gzipped: true,
         is_static: false,
     },
+    // Earth orientation binary PCKs. NAIF periodically republishes the
+    // historical and predict kernels with filenames encoding their coverage;
+    // bump the filenames here when upstream does. `earth_latest_high_prec.bpc`
+    // is a stable endpoint NAIF updates ~weekly.
+    KernelEntry {
+        filename: "earth_latest_high_prec.bpc",
+        url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/earth_latest_high_prec.bpc",
+        gzipped: false,
+        is_static: false,
+    },
+    KernelEntry {
+        filename: "earth_620120_250826.bpc",
+        url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/earth_620120_250826.bpc",
+        gzipped: false,
+        is_static: true,
+    },
+    KernelEntry {
+        filename: "earth_2025_250826_2125_predict.bpc",
+        url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/earth_2025_250826_2125_predict.bpc",
+        gzipped: false,
+        is_static: true,
+    },
 ];
 
 // ─── Sidecar metadata ──────────────────────────────────────────────────────
@@ -79,7 +107,7 @@ struct FileMeta {
 
 // ─── AssistDataPaths ────────────────────────────────────────────────────────
 
-/// Resolved paths to the three files ASSIST needs.
+/// Resolved paths to all data files ASSIST needs.
 #[derive(Debug, Clone)]
 pub struct AssistDataPaths {
     /// DE440 planetary ephemeris SPK.
@@ -88,6 +116,23 @@ pub struct AssistDataPaths {
     pub asteroids: PathBuf,
     /// MPC observatory codes JSON (decompressed).
     pub obscodes: PathBuf,
+    /// Current high-precision Earth orientation PCK, updated ~weekly by NAIF.
+    /// Covers approximately 2000 to the near future.
+    pub eop_high_prec: PathBuf,
+    /// Historical Earth orientation PCK (1962 → ~present).
+    pub eop_historical: PathBuf,
+    /// Long-term Earth orientation predict PCK (~2025 → 2125).
+    pub eop_predict: PathBuf,
+}
+
+impl AssistDataPaths {
+    /// The three EOP kernel paths in SPICE-idiomatic load order
+    /// (predict, historical, current) — pass this directly to
+    /// [`crate::earth_orientation::EarthOrientation::from_paths`] so the
+    /// current high-precision kernel wins wherever it has coverage.
+    pub fn eop_kernels(&self) -> [&PathBuf; 3] {
+        [&self.eop_predict, &self.eop_historical, &self.eop_high_prec]
+    }
 }
 
 // ─── DataError ──────────────────────────────────────────────────────────────
@@ -165,10 +210,13 @@ impl DataManager {
             planets: self.data_dir.join("de440.bsp"),
             asteroids: self.data_dir.join("sb441-n16.bsp"),
             obscodes: self.data_dir.join("obscodes_extended.json"),
+            eop_high_prec: self.data_dir.join("earth_latest_high_prec.bpc"),
+            eop_historical: self.data_dir.join("earth_620120_250826.bpc"),
+            eop_predict: self.data_dir.join("earth_2025_250826_2125_predict.bpc"),
         }
     }
 
-    /// Return paths if all three files exist. No network access.
+    /// Return paths if all data files exist. No network access.
     pub fn offline(&self) -> Result<AssistDataPaths, DataError> {
         let missing: Vec<String> = DEFAULT_KERNELS
             .iter()
@@ -434,6 +482,52 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let nonexistent = dir.path().join("not_there.bin");
         assert!(local_md5_matches(&nonexistent, "").unwrap());
+    }
+
+    /// Every kernel declared in `DEFAULT_KERNELS` must be reachable through
+    /// `AssistDataPaths`; otherwise a download happens but the path is never
+    /// returned to the caller, creating orphan files in the cache dir.
+    #[test]
+    fn every_default_kernel_has_a_path_field() {
+        let dm = DataManager::with_dir("/tmp/check");
+        let paths = dm.paths();
+        let all_paths = [
+            &paths.planets,
+            &paths.asteroids,
+            &paths.obscodes,
+            &paths.eop_high_prec,
+            &paths.eop_historical,
+            &paths.eop_predict,
+        ];
+        for entry in DEFAULT_KERNELS {
+            let expected = dm.data_dir.join(entry.filename);
+            assert!(
+                all_paths.iter().any(|p| **p == expected),
+                "kernel {:?} in DEFAULT_KERNELS has no corresponding field in AssistDataPaths",
+                entry.filename
+            );
+        }
+        // And the reverse: every returned path must correspond to a declared
+        // kernel (guards against dangling fields).
+        for p in all_paths {
+            let filename = p.file_name().unwrap().to_str().unwrap();
+            assert!(
+                DEFAULT_KERNELS.iter().any(|e| e.filename == filename),
+                "AssistDataPaths field points at {filename:?}, which is not in DEFAULT_KERNELS"
+            );
+        }
+    }
+
+    #[test]
+    fn eop_kernels_returns_spice_idiomatic_load_order() {
+        // predict → historical → current, so the high-precision kernel wins
+        // at epochs it covers (last-in-wins).
+        let dm = DataManager::with_dir("/tmp/check");
+        let paths = dm.paths();
+        let kernels = paths.eop_kernels();
+        assert_eq!(kernels[0], &paths.eop_predict);
+        assert_eq!(kernels[1], &paths.eop_historical);
+        assert_eq!(kernels[2], &paths.eop_high_prec);
     }
 
     #[test]
