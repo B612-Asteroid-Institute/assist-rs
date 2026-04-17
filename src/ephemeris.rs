@@ -278,9 +278,21 @@ impl<'a> EphemerisSim<'a> {
 
     /// Integrate to the given epoch (MJD TDB) and return the heliocentric
     /// ecliptic J2000 state of the test particle.
+    ///
+    /// Uses `assist_integrate_or_interpolate` under the hood: the first
+    /// call does a full IAS15 integration (with `exact_finish_time = 0`,
+    /// potentially overshooting) and reconstructs the state at the exact
+    /// target via the integrator's `br` Hermite-interpolation coefficients.
+    /// Subsequent calls whose target falls inside the last completed step's
+    /// interval skip integration entirely and return pure polynomial
+    /// interpolation — typically ~1 µs vs ~50 µs for a short-back-step
+    /// re-integration. This is the central optimization for the light-time
+    /// iteration loop in [`compute_single_ephemeris`], where tau shrinks
+    /// by femtoseconds-to-microseconds per iteration and successive
+    /// t_emit values cluster inside the last completed step.
     fn integrate_to(&mut self, mjd_tdb: f64) -> Result<[f64; 6]> {
         let t_target = mjd_to_assist_time(mjd_tdb, self.jd_ref);
-        self.asim.integrate(t_target)?;
+        self.asim.integrate_or_interpolate(t_target)?;
 
         let particles = self.asim.sim().particles();
         if particles.is_empty() {

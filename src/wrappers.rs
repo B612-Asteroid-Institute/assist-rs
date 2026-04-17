@@ -360,6 +360,28 @@ impl AssistSim {
         self.sim.integrate(tmax)
     }
 
+    /// Integrate to target time `t`, with interpolation inside the last
+    /// completed IAS15 step when possible.
+    ///
+    /// On first call this behaves like [`integrate`] except it sets
+    /// `exact_finish_time = 0` so IAS15 may overshoot; the final state
+    /// is reconstructed at `t` via polynomial interpolation using the
+    /// integrator's `br` coefficients. On subsequent calls where `t`
+    /// falls within the last completed step's interval, no integration
+    /// happens at all — pure polynomial evaluation, typically one-to-two
+    /// orders of magnitude cheaper than a full step. Intended for
+    /// light-time iteration loops where the target shifts by
+    /// femtoseconds-to-microseconds per iteration.
+    ///
+    /// After the call, `sim.particles[i]` holds the state at `t`
+    /// (interpolated), even though `sim.t` may be past `t`.
+    ///
+    /// [`integrate`]: Self::integrate
+    pub fn integrate_or_interpolate(&mut self, t: f64) -> Result<()> {
+        unsafe { ffi::assist_integrate_or_interpolate(self.ax, t) }
+        Ok(())
+    }
+
     /// Raw mutable pointer to the underlying REBOUND simulation.
     /// See [`Simulation::raw_ptr_mut`].
     #[doc(hidden)]
