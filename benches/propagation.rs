@@ -354,6 +354,29 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// assist_generate_ephemeris — exercises the light-time iteration loop.
+// Picks a 30-day propagation window with the test particle viewed from the
+// geocenter at 7 evenly-spaced observer epochs so the internal EphemerisSim
+// actually benefits from the interpolate-within-last-step shortcut on
+// successive light-time iterations.
+// ---------------------------------------------------------------------------
+
+fn bench_generate_ephemeris(c: &mut Criterion) {
+    let Some(ephem) = load_ephem() else { return };
+
+    let orbit = ceres_orbit();
+    let observers: Vec<assist_rs::Observer> = (0..7)
+        .map(|i| assist_rs::Observer::new(assist_rs::Origin::Earth, EPOCH + 5.0 * i as f64))
+        .collect();
+
+    let mut group = c.benchmark_group("generate_ephemeris");
+    group.bench_function("earth_7_observers_30d", |b| {
+        b.iter(|| assist_rs::assist_generate_ephemeris(&ephem, &orbit, &observers, None).unwrap());
+    });
+    group.finish();
+}
+
+// ---------------------------------------------------------------------------
 // Criterion harness
 // ---------------------------------------------------------------------------
 
@@ -366,5 +389,6 @@ criterion_group!(
     bench_parallel_propagation,
     bench_duration_scaling,
     bench_pool_vs_unpooled,
+    bench_generate_ephemeris,
 );
 criterion_main!(benches);
