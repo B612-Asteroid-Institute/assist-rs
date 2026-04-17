@@ -295,6 +295,12 @@ impl<'a> PropagatorPool<'a> {
         self.config
     }
 
+    /// Cumulative IAS15 step count across all propagations done by this
+    /// pool. Useful for diagnostics; no functional impact.
+    pub fn steps_done(&self) -> u64 {
+        self.asim.sim().steps_done()
+    }
+
     /// Propagate `orbit` to `target_epochs`, reusing the internal simulation.
     ///
     /// The orbit's non-grav flag must match the pool's `config.has_nongrav`
@@ -323,14 +329,14 @@ impl<'a> PropagatorPool<'a> {
         let t0 = mjd_to_assist_time(orbit.epoch, self.jd_ref);
 
         // 1) Clear IAS15 scratch arrays so no compensated-sum or predictor
-        //    state leaks from the previous orbit. Reallocated on first step.
+        //    state leaks from the previous orbit. In-place memset, no
+        //    allocator churn.
         self.asim.reset_integrator();
 
-        // 2) Set epoch & re-seed the timestep with REBOUND's default
-        //    (0.001 days). IAS15 adaptively adjusts from here, independent
-        //    of what the previous orbit's final dt happened to be. dt=0
-        //    would lock IAS15 into a zero-step infinite loop, so never
-        //    zero it here.
+        // 2) Re-seed epoch and timestep. `dt = 0` would lock IAS15 into a
+        //    zero-step infinite loop (copysign preserves zero); use REBOUND's
+        //    default of 0.001 days so IAS15 has a fresh, adaptive starting
+        //    point independent of the previous orbit's final dt.
         self.asim.sim_mut().set_t(t0);
         self.asim.sim_mut().set_dt(0.001);
 

@@ -252,6 +252,108 @@ fn bench_duration_scaling(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// PropagatorPool vs assist_propagate: the pool amortizes REBOUND/ASSIST setup
+// (~25 µs / orbit) across many orbits with matching force-model config.
+// Measured by looping N orbits through each path. The per-iteration work of
+// each bench is N full propagations; criterion divides out to per-loop time.
+// ---------------------------------------------------------------------------
+
+/// Generate N distinct orbits by perturbing Ceres's initial state. The
+/// perturbation is small (~1e-6 AU on position, ~1e-8 AU/day on velocity) so
+/// every orbit stays in roughly the main belt — IAS15 step counts stay
+/// comparable and we're timing the setup overhead, not dynamical variation.
+fn varied_orbits(n: usize) -> Vec<assist_rs::Orbit> {
+    (0..n)
+        .map(|i| {
+            let f = i as f64;
+            let mut state = CERES_STATE;
+            state[0] += f * 1e-6;
+            state[1] += f * 1.3e-6;
+            state[2] += f * -0.7e-6;
+            state[3] += f * 1e-8;
+            state[4] += f * -1.1e-8;
+            state[5] += f * 0.5e-8;
+            assist_rs::Orbit::new(state, EPOCH)
+        })
+        .collect()
+}
+
+fn bench_pool_vs_unpooled(c: &mut Criterion) {
+    let Some(ephem) = load_ephem() else { return };
+
+    // 128 is small enough to keep the criterion inner-loop fast (<100 ms per
+    // sample at dt=365) but large enough to wash out pool-construction cost.
+    // The bench reports per-batch-of-128 time; divide for per-orbit.
+    const N: usize = 128;
+    let orbits = varied_orbits(N);
+
+    for &days in &[30.0f64, 365.0] {
+        let targets = [EPOCH + days];
+
+        let mut group = c.benchmark_group(format!("pool_vs_unpooled_{}d", days as u32));
+
+        group.bench_function("unpooled", |b| {
+            b.iter(|| {
+                for o in &orbits {
+                    criterion::black_box(
+                        assist_rs::assist_propagate(&ephem, o, &targets, false).unwrap(),
+                    );
+                }
+            });
+        });
+
+        group.bench_function("pooled", |b| {
+            b.iter_with_setup(
+                || {
+                    assist_rs::PropagatorPool::new(
+                        &ephem,
+                        assist_rs::PropagatorConfig::gravity_only(),
+                    )
+                    .unwrap()
+                },
+                |mut pool| {
+                    for o in &orbits {
+                        criterion::black_box(pool.propagate(o, &targets).unwrap());
+                    }
+                },
+            );
+        });
+
+        // STM variant: same orbits, both paths with compute_stm=true. Pool
+        // win should be a bit smaller here since the STM integration itself
+        // costs much more than the setup it amortizes.
+        group.bench_function("unpooled_with_stm", |b| {
+            b.iter(|| {
+                for o in &orbits {
+                    criterion::black_box(
+                        assist_rs::assist_propagate(&ephem, o, &targets, true).unwrap(),
+                    );
+                }
+            });
+        });
+
+        group.bench_function("pooled_with_stm", |b| {
+            b.iter_with_setup(
+                || {
+                    assist_rs::PropagatorPool::new(
+                        &ephem,
+                        assist_rs::PropagatorConfig::gravity_with_stm(),
+                    )
+                    .unwrap()
+                },
+                |mut pool| {
+                    for o in &orbits {
+                        criterion::black_box(pool.propagate(o, &targets).unwrap());
+                    }
+                },
+            );
+        });
+
+        group.finish();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Criterion harness
 // ---------------------------------------------------------------------------
 
@@ -263,5 +365,6 @@ criterion_group!(
     bench_rust_vs_raw_c,
     bench_parallel_propagation,
     bench_duration_scaling,
+    bench_pool_vs_unpooled,
 );
 criterion_main!(benches);
