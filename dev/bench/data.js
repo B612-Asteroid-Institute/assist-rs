@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776362631507,
+  "lastUpdate": 1776406349770,
   "repoUrl": "https://github.com/B612-Asteroid-Institute/assist-rs",
   "entries": {
     "assist-rs Benchmarks": [
@@ -359,6 +359,126 @@ window.BENCHMARK_DATA = {
             "name": "duration_scaling/days/365",
             "value": 1521234,
             "range": "± 35369",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "moeyensj@gmail.com",
+            "name": "Joachim Moeyens",
+            "username": "moeyensj"
+          },
+          "committer": {
+            "email": "moeyensj@gmail.com",
+            "name": "Joachim Moeyens",
+            "username": "moeyensj"
+          },
+          "distinct": true,
+          "id": "0268b50756c6edca27191c6121c0a4d216736722",
+          "message": "Add Earth orientation kernels to DataManager catalog\n\nFlagged during code review but skipped when the conversation diverged\ninto the SPICE precedence work — DataManager only downloaded\nde440.bsp, sb441-n16.bsp, and obscodes_extended.json. A user relying\non the default-feature data manager had no way to obtain the EOP\nkernels and fell back to the ~50 mas GMST approximation for ground\nobservatories.\n\nRegister the three NAIF Earth orientation PCKs in DEFAULT_KERNELS:\n\n  - earth_latest_high_prec.bpc         (dynamic; weekly updates)\n  - earth_620120_250826.bpc            (historical, 1962 → 2025)\n  - earth_2025_250826_2125_predict.bpc (long-term predict → 2125)\n\n`AssistDataPaths` gains three new fields plus an `eop_kernels()`\nhelper that returns them in SPICE-idiomatic load order\n(predict → historical → current) so the high-precision kernel wins\nat epochs it covers. README example updated to show the full flow.\n\nTwo new tests enforce invariants the human eye missed the first time:\nevery kernel in `DEFAULT_KERNELS` must be reachable through\n`AssistDataPaths` (and vice versa), and `eop_kernels()` must return\nthem in last-in-wins order.\n\nNAIF periodically republishes the historical and predict kernels with\nnew date-range suffixes; when that happens, bump the two filenames in\n`DEFAULT_KERNELS` and in `paths()`. `earth_latest_high_prec.bpc` is\nNAIF's stable endpoint for continuous updates.\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-04-16T23:05:38-07:00",
+          "tree_id": "5e1bdc63e31047a6c01732b9ea540e8c596cf337",
+          "url": "https://github.com/B612-Asteroid-Institute/assist-rs/commit/0268b50756c6edca27191c6121c0a4d216736722"
+        },
+        "date": 1776406348140,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "propagate_single/rust_api/1",
+            "value": 498455,
+            "range": "± 50607",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_single/rust_api/10",
+            "value": 1321603,
+            "range": "± 106468",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_single/rust_api/100",
+            "value": 10157060,
+            "range": "± 44045",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_stm/without_stm",
+            "value": 500615,
+            "range": "± 2928",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_stm/with_stm",
+            "value": 1114049,
+            "range": "± 29696",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_nongrav/gravity_only",
+            "value": 499189,
+            "range": "± 2566",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_nongrav/with_a2",
+            "value": 545602,
+            "range": "± 3248",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rust_vs_raw_c/rust_api",
+            "value": 501270,
+            "range": "± 7440",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rust_vs_raw_c/raw_c_ffi",
+            "value": 501510,
+            "range": "± 14373",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel/serial_28_orbits",
+            "value": 14216164,
+            "range": "± 614548",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel/rayon_28_orbits",
+            "value": 10703107,
+            "range": "± 187914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/1",
+            "value": 349567,
+            "range": "± 23716",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/10",
+            "value": 442717,
+            "range": "± 19848",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/30",
+            "value": 502581,
+            "range": "± 19647",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/100",
+            "value": 742741,
+            "range": "± 12641",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/365",
+            "value": 1445526,
+            "range": "± 32040",
             "unit": "ns/iter"
           }
         ]
