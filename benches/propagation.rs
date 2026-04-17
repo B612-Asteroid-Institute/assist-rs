@@ -391,7 +391,7 @@ fn bench_propagate_batch(c: &mut Criterion) {
     });
 
     group.bench_function("batch_api_128", |b| {
-        b.iter(|| assist_rs::assist_propagate_batch(&ephem, &orbits, &targets, false).unwrap());
+        b.iter(|| assist_rs::assist_propagate_batch(&ephem, &orbits, &targets, false, 0).unwrap());
     });
 
     group.finish();
@@ -407,7 +407,9 @@ fn bench_generate_ephemeris(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("generate_ephemeris");
     group.bench_function("earth_7_observers_30d", |b| {
-        b.iter(|| assist_rs::assist_generate_ephemeris(&ephem, &orbit, &observers, None).unwrap());
+        b.iter(|| {
+            assist_rs::assist_generate_ephemeris(&ephem, &orbit, &observers, None, 1).unwrap()
+        });
     });
     group.finish();
 }

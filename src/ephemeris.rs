@@ -48,36 +48,41 @@ impl Observer {
 /// 2. Iterate light-time correction to find emission time t_emit
 /// 3. Compute topocentric spherical coordinates (RA, Dec, range + rates)
 ///
+/// Observers are independent — each gets a fresh internal simulation — so
+/// this dispatches through rayon when `num_threads != 1` and the `parallel`
+/// cargo feature is on.
+///
 /// # Arguments
 /// - `ephem`: ASSIST ephemeris data.
 /// - `orbit`: initial orbit (state, epoch, optional non-grav params).
 /// - `observers`: observer origins and epochs.
 /// - `obs_table`: optional observatory table (required if any observer is an `Observatory`).
+/// - `num_threads`: `0` → rayon global pool (one worker per core),
+///   `1` → serial (no rayon overhead), `n > 1` → dedicated pool with `n` workers.
+///   Ignored without the `parallel` feature.
 ///
 /// # Returns
-/// One `EphemerisResult` per observer, in the same order.
+/// One `EphemerisResult` per observer, in input order regardless of the
+/// threading mode.
 pub fn assist_generate_ephemeris(
     ephem: &Ephemeris,
     orbit: &Orbit,
     observers: &[Observer],
     obs_table: Option<&ObservatoryTable>,
+    num_threads: usize,
 ) -> Result<Vec<EphemerisResult>> {
     if observers.is_empty() {
         return Ok(vec![]);
     }
 
     let c = ephem.c_au_per_day();
-    let mut results = Vec::with_capacity(observers.len());
-
-    for obs in observers {
-        // One simulation per observer — reused across the initial propagation
-        // and every light-time iteration.
+    let op = |obs: &Observer| -> Result<EphemerisResult> {
+        // One simulation per observer — reused across the initial
+        // propagation and every light-time iteration.
         let mut sim = EphemerisSim::new(ephem, orbit)?;
-        let result = compute_single_ephemeris(ephem, &mut sim, obs, c, obs_table)?;
-        results.push(result);
-    }
-
-    Ok(results)
+        compute_single_ephemeris(ephem, &mut sim, obs, c, obs_table)
+    };
+    crate::propagate::map_with_threads(observers, num_threads, op)
 }
 
 /// Compute ephemeris for a single observer with light-time iteration.
