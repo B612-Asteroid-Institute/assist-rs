@@ -182,23 +182,24 @@ pub fn assist_propagate(
 ///
 /// # Parallelism
 ///
-/// When the `parallel` feature is enabled (default), this uses rayon's
-/// work-stealing pool to propagate independent orbits across available
-/// CPU cores. Each orbit still pays its own [`assist_propagate`] setup
-/// cost (~1 µs of `reb_simulation_create` + `assist_attach`); the win
-/// is the embarrassingly-parallel map across orbits, not amortization
-/// inside a single orbit.
+/// `num_threads` controls how work is distributed:
 ///
-/// Without the `parallel` feature, this falls back to a serial loop —
-/// equivalent to `orbits.iter().map(|o| assist_propagate(...)).collect()`
-/// but bundled into one function so callers don't have to reason about
-/// error propagation themselves.
+/// * `0` — use rayon's default global pool (typically one worker per CPU
+///   core). Best for single-process workloads that want maximum throughput.
+/// * `1` — serial loop, no rayon scheduling overhead. Equivalent to
+///   `orbits.iter().map(|o| assist_propagate(...)).collect()`.
+/// * `n > 1` — build a dedicated rayon thread pool with exactly `n`
+///   workers and run the batch inside it. Useful when the caller already
+///   parallelizes at a higher level and wants to bound the per-call
+///   concurrency.
 ///
-/// `Ephemeris` is `Send + Sync` (data is read-only after construction),
-/// so one ephemeris can serve all worker threads.
+/// Each orbit still pays its own [`assist_propagate`] setup cost (~1 µs of
+/// `reb_simulation_create` + `assist_attach`); the parallel win is the
+/// embarrassingly-parallel map across orbits. `Ephemeris` is `Send + Sync`
+/// so one ephemeris serves all worker threads.
 ///
-/// # Arguments
-/// Same as [`assist_propagate`] except `orbits` is a slice.
+/// Without the `parallel` cargo feature, `num_threads` is ignored and the
+/// function always runs serially.
 ///
 /// # Errors
 /// Returns the first error encountered across any orbit's propagation.
@@ -207,21 +208,44 @@ pub fn assist_propagate_batch(
     orbits: &[Orbit],
     target_epochs: &[f64],
     compute_stm: bool,
+    num_threads: usize,
 ) -> Result<Vec<Vec<PropagatedState>>> {
+    let op = |orbit: &Orbit| assist_propagate(ephem, orbit, target_epochs, compute_stm);
+    map_with_threads(orbits, num_threads, op)
+}
+
+/// Dispatch a fallible per-item function across `items` using `num_threads`
+/// rayon workers (0 = global pool, 1 = serial, n = custom pool).
+///
+/// Factored out so [`assist_propagate_batch`] and
+/// [`crate::ephemeris::assist_generate_ephemeris`] share one dispatch
+/// implementation. `Send + Sync` bounds are required on `T` and the
+/// closure's captures because rayon moves work across threads.
+pub(crate) fn map_with_threads<T, U, F>(items: &[T], num_threads: usize, f: F) -> Result<Vec<U>>
+where
+    T: Sync,
+    U: Send,
+    F: Fn(&T) -> Result<U> + Send + Sync,
+{
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
-        orbits
-            .par_iter()
-            .map(|orbit| assist_propagate(ephem, orbit, target_epochs, compute_stm))
-            .collect()
+        match num_threads {
+            0 => items.par_iter().map(&f).collect(),
+            1 => items.iter().map(&f).collect(),
+            n => {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(n)
+                    .build()
+                    .map_err(|e| Error::Other(format!("rayon pool build failed: {e}")))?;
+                pool.install(|| items.par_iter().map(&f).collect())
+            }
+        }
     }
     #[cfg(not(feature = "parallel"))]
     {
-        orbits
-            .iter()
-            .map(|orbit| assist_propagate(ephem, orbit, target_epochs, compute_stm))
-            .collect()
+        let _ = num_threads;
+        items.iter().map(&f).collect()
     }
 }
 

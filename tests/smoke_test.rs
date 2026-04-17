@@ -326,7 +326,8 @@ fn test_generate_ephemeris() {
     // Observer at geocenter
     let observer = assist_rs::Observer::new(assist_rs::Origin::Earth, 60010.0);
 
-    let results = assist_rs::assist_generate_ephemeris(&ephem, &orbit, &[observer], None).unwrap();
+    let results =
+        assist_rs::assist_generate_ephemeris(&ephem, &orbit, &[observer], None, 1).unwrap();
 
     assert_eq!(results.len(), 1);
     let eph = &results[0];
@@ -763,7 +764,7 @@ fn test_propagate_batch_matches_serial_loop() {
     ];
     let targets = [60030.0, 60090.0, 60365.0];
 
-    let batch = assist_rs::assist_propagate_batch(&ephem, &orbits, &targets, false).unwrap();
+    let batch = assist_rs::assist_propagate_batch(&ephem, &orbits, &targets, false, 0).unwrap();
     assert_eq!(batch.len(), orbits.len());
 
     for (i, orbit) in orbits.iter().enumerate() {
@@ -784,6 +785,61 @@ fn test_propagate_batch_empty_orbits() {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
-    let result = assist_rs::assist_propagate_batch(&ephem, &[], &[60030.0], false).unwrap();
+    let result = assist_rs::assist_propagate_batch(&ephem, &[], &[60030.0], false, 0).unwrap();
     assert!(result.is_empty());
+}
+
+#[test]
+fn test_propagate_batch_num_threads_modes_agree() {
+    // All three num_threads modes (0 = global pool, 1 = serial, n = custom
+    // pool) must produce bit-for-bit identical results. Rayon's scheduling
+    // order shouldn't affect per-orbit numerics because each orbit runs in
+    // its own fresh AssistSim.
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let orbits = vec![
+        assist_rs::Orbit::new(CERES_STATE, 60000.0),
+        assist_rs::Orbit::new(PALLAS_STATE, 60000.0),
+        assist_rs::Orbit::new(JUNO_STATE, 60000.0),
+    ];
+    let targets = [60030.0];
+
+    let default_pool =
+        assist_rs::assist_propagate_batch(&ephem, &orbits, &targets, false, 0).unwrap();
+    for (nt, label) in [(1, "serial"), (2, "2 threads"), (4, "4 threads")] {
+        let got = assist_rs::assist_propagate_batch(&ephem, &orbits, &targets, false, nt).unwrap();
+        for i in 0..orbits.len() {
+            assert_eq!(
+                default_pool[i][0].state, got[i][0].state,
+                "orbit {i} / {label}: state differs from default-pool run"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_generate_ephemeris_num_threads_modes_agree() {
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
+    let observers: Vec<_> = (0..5)
+        .map(|i| assist_rs::Observer::new(assist_rs::Origin::Earth, 60000.0 + 6.0 * i as f64))
+        .collect();
+
+    let default_pool =
+        assist_rs::assist_generate_ephemeris(&ephem, &orbit, &observers, None, 0).unwrap();
+    for (nt, label) in [(1, "serial"), (3, "3 threads")] {
+        let got =
+            assist_rs::assist_generate_ephemeris(&ephem, &orbit, &observers, None, nt).unwrap();
+        for i in 0..observers.len() {
+            assert_eq!(
+                default_pool[i].spherical, got[i].spherical,
+                "observer {i} / {label}: spherical differs"
+            );
+        }
+    }
 }

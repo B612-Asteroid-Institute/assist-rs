@@ -438,14 +438,19 @@ fn test_ephemeris_against_horizons_v2() {
                 })
                 .collect();
 
-            let predicted =
-                assist_rs::assist_generate_ephemeris(&ephem, &orbit, &observers, Some(&obs_table))
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "Ephemeris failed for {} @ {}: {e}",
-                            entry.object_id, obs_code
-                        )
-                    });
+            let predicted = assist_rs::assist_generate_ephemeris(
+                &ephem,
+                &orbit,
+                &observers,
+                Some(&obs_table),
+                1,
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Ephemeris failed for {} @ {}: {e}",
+                    entry.object_id, obs_code
+                )
+            });
 
             let mut rows = Vec::new();
             for (pr, href) in predicted.iter().zip(horizons_obs.iter()) {
