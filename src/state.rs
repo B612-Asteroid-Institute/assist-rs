@@ -1,5 +1,6 @@
 //! `assist_get_state` — Query state of any solar system body or observatory.
 
+use crate::assist_data::AssistData;
 use crate::coordinates::equatorial_to_ecliptic;
 use crate::ffi;
 use crate::observatory::ObservatoryTable;
@@ -19,28 +20,34 @@ pub struct BodyState {
 /// Get the heliocentric ecliptic J2000 state of a body or observatory at one or more epochs.
 ///
 /// # Arguments
-/// - `ephem`: ASSIST ephemeris data.
+/// - `data`: bundle holding the ASSIST ephemeris and (for observatory
+///   origins) the observatory table.
 /// - `origin`: the body or observatory to query.
 /// - `epochs`: one or more epochs (MJD TDB).
-/// - `obs_table`: optional observatory table (required if origin is an `Observatory`).
+/// - `num_threads`: follows the same `None`/`Some(1)`/`Some(n)` convention as
+///   [`crate::assist_propagate`]. Each epoch is cheap (~1–5 µs for a planetary
+///   body, ~2–10 µs for an ITRF-rotated ground observatory), so serial
+///   (`Some(1)`) is typically the right choice; parallelism pays off when
+///   `epochs.len()` is in the thousands or more.
 ///
 /// # Returns
 /// One `BodyState` per epoch, in the same order.
 pub fn assist_get_state(
-    ephem: &Ephemeris,
+    data: &AssistData,
     origin: &Origin,
     epochs: &[f64],
-    obs_table: Option<&ObservatoryTable>,
+    num_threads: Option<usize>,
 ) -> Result<Vec<BodyState>> {
-    let mut results = Vec::with_capacity(epochs.len());
-    for &epoch_mjd in epochs {
+    let ephem = &data.ephem;
+    let obs_table = data.observatory.as_ref();
+    let op = |&epoch_mjd: &f64| -> Result<BodyState> {
         let state = resolve_origin_state(ephem, origin, epoch_mjd, obs_table)?;
-        results.push(BodyState {
+        Ok(BodyState {
             state,
             epoch: epoch_mjd,
-        });
-    }
-    Ok(results)
+        })
+    };
+    crate::propagate::map_with_threads(epochs, num_threads, op)
 }
 
 /// Resolve the heliocentric ecliptic J2000 state of an origin at a single epoch.

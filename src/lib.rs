@@ -17,6 +17,7 @@ mod wrappers;
 
 pub use wrappers::{AssistSim, Ephemeris, Simulation};
 
+mod assist_data;
 pub mod coordinates;
 #[cfg(feature = "data")]
 pub mod data;
@@ -28,6 +29,7 @@ mod origin;
 pub mod propagate;
 mod state;
 
+pub use assist_data::AssistData;
 pub use coordinates::{ecliptic_to_equatorial, equatorial_to_ecliptic};
 pub use ephemeris::{
     EphemerisResult, Observer, assist_generate_ephemeris, assist_generate_ephemeris_single,

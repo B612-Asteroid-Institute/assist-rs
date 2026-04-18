@@ -31,6 +31,10 @@ fn load_ephem() -> Option<assist_rs::Ephemeris> {
     assist_rs::Ephemeris::from_paths(&planets, &asteroids).ok()
 }
 
+fn load_data() -> Option<assist_rs::AssistData> {
+    load_ephem().map(assist_rs::AssistData::new)
+}
+
 // Ceres heliocentric ecliptic J2000 at MJD 60000.0 TDB
 const CERES_STATE: [f64; 6] = [
     -1.938_169_72,
@@ -51,7 +55,7 @@ fn ceres_orbit() -> assist_rs::Orbit {
 // ---------------------------------------------------------------------------
 
 fn bench_propagate_single(c: &mut Criterion) {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping benchmarks: ASSIST_PLANETS_PATH / ASSIST_ASTEROIDS_PATH not set");
         return;
     };
@@ -70,7 +74,7 @@ fn bench_propagate_single(c: &mut Criterion) {
             &targets,
             |b, targets| {
                 b.iter(|| {
-                    assist_rs::assist_propagate_single(&ephem, &orbit, targets, false).unwrap()
+                    assist_rs::assist_propagate_single(&data, &orbit, targets, false).unwrap()
                 });
             },
         );
@@ -80,22 +84,22 @@ fn bench_propagate_single(c: &mut Criterion) {
 }
 
 fn bench_propagate_with_stm(c: &mut Criterion) {
-    let Some(ephem) = load_ephem() else { return };
+    let Some(data) = load_data() else { return };
 
     let orbit = ceres_orbit();
     let targets = vec![EPOCH + 30.0];
 
     c.benchmark_group("propagate_stm")
         .bench_function("without_stm", |b| {
-            b.iter(|| assist_rs::assist_propagate_single(&ephem, &orbit, &targets, false).unwrap());
+            b.iter(|| assist_rs::assist_propagate_single(&data, &orbit, &targets, false).unwrap());
         })
         .bench_function("with_stm", |b| {
-            b.iter(|| assist_rs::assist_propagate_single(&ephem, &orbit, &targets, true).unwrap());
+            b.iter(|| assist_rs::assist_propagate_single(&data, &orbit, &targets, true).unwrap());
         });
 }
 
 fn bench_propagate_with_nongrav(c: &mut Criterion) {
-    let Some(ephem) = load_ephem() else { return };
+    let Some(data) = load_data() else { return };
 
     let orbit_grav = ceres_orbit();
     let ng = assist_rs::NonGravParams::new(0.0, 1e-10, 0.0);
@@ -105,12 +109,12 @@ fn bench_propagate_with_nongrav(c: &mut Criterion) {
     c.benchmark_group("propagate_nongrav")
         .bench_function("gravity_only", |b| {
             b.iter(|| {
-                assist_rs::assist_propagate_single(&ephem, &orbit_grav, &targets, false).unwrap()
+                assist_rs::assist_propagate_single(&data, &orbit_grav, &targets, false).unwrap()
             });
         })
         .bench_function("with_a2", |b| {
             b.iter(|| {
-                assist_rs::assist_propagate_single(&ephem, &orbit_ng, &targets, false).unwrap()
+                assist_rs::assist_propagate_single(&data, &orbit_ng, &targets, false).unwrap()
             });
         });
 }
@@ -161,13 +165,14 @@ fn raw_c_propagate(
 }
 
 fn bench_rust_vs_raw_c(c: &mut Criterion) {
-    let Some(ephem) = load_ephem() else { return };
+    let Some(data) = load_data() else { return };
 
     // Pre-compute the barycentric equatorial state for the raw C path
-    let jd_ref = ephem.jd_ref();
+    let jd_ref = data.ephem.jd_ref();
     let t0 = (EPOCH + 2_400_000.5) - jd_ref;
     let eq_state = assist_rs::coordinates::ecliptic_to_equatorial(&CERES_STATE);
-    let sun = ephem
+    let sun = data
+        .ephem
         .get_body_state(assist_rs::ffi::ASSIST_BODY_SUN, t0)
         .unwrap();
     let bary_eq = [
@@ -186,11 +191,11 @@ fn bench_rust_vs_raw_c(c: &mut Criterion) {
     let mut group = c.benchmark_group("rust_vs_raw_c");
 
     group.bench_function("rust_api", |b| {
-        b.iter(|| assist_rs::assist_propagate_single(&ephem, &orbit, &targets, false).unwrap());
+        b.iter(|| assist_rs::assist_propagate_single(&data, &orbit, &targets, false).unwrap());
     });
 
     group.bench_function("raw_c_ffi", |b| {
-        b.iter(|| raw_c_propagate(&ephem, &bary_eq, t0, t_target));
+        b.iter(|| raw_c_propagate(&data.ephem, &bary_eq, t0, t_target));
     });
 
     group.finish();
@@ -201,7 +206,7 @@ fn bench_rust_vs_raw_c(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_parallel_propagation(c: &mut Criterion) {
-    let Some(ephem) = load_ephem() else { return };
+    let Some(data) = load_data() else { return };
 
     // 28 slightly different orbits (perturb velocity slightly)
     let orbits: Vec<assist_rs::Orbit> = (0..28)
@@ -220,7 +225,7 @@ fn bench_parallel_propagation(c: &mut Criterion) {
             orbits
                 .iter()
                 .map(|orbit| {
-                    assist_rs::assist_propagate_single(&ephem, orbit, &targets, false).unwrap()
+                    assist_rs::assist_propagate_single(&data, orbit, &targets, false).unwrap()
                 })
                 .collect::<Vec<_>>()
         });
@@ -232,7 +237,7 @@ fn bench_parallel_propagation(c: &mut Criterion) {
             orbits
                 .par_iter()
                 .map(|orbit| {
-                    assist_rs::assist_propagate_single(&ephem, orbit, &targets, false).unwrap()
+                    assist_rs::assist_propagate_single(&data, orbit, &targets, false).unwrap()
                 })
                 .collect::<Vec<_>>()
         });
@@ -246,7 +251,7 @@ fn bench_parallel_propagation(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_duration_scaling(c: &mut Criterion) {
-    let Some(ephem) = load_ephem() else { return };
+    let Some(data) = load_data() else { return };
 
     let orbit = ceres_orbit();
     let mut group = c.benchmark_group("duration_scaling");
@@ -254,7 +259,7 @@ fn bench_duration_scaling(c: &mut Criterion) {
     for days in [1, 10, 30, 100, 365] {
         let targets = vec![EPOCH + days as f64];
         group.bench_with_input(BenchmarkId::new("days", days), &targets, |b, targets| {
-            b.iter(|| assist_rs::assist_propagate_single(&ephem, &orbit, targets, false).unwrap());
+            b.iter(|| assist_rs::assist_propagate_single(&data, &orbit, targets, false).unwrap());
         });
     }
 
@@ -289,7 +294,7 @@ fn varied_orbits(n: usize) -> Vec<assist_rs::Orbit> {
 }
 
 fn bench_pool_vs_unpooled(c: &mut Criterion) {
-    let Some(ephem) = load_ephem() else { return };
+    let Some(data) = load_data() else { return };
 
     // 128 is small enough to keep the criterion inner-loop fast (<100 ms per
     // sample at dt=365) but large enough to wash out pool-construction cost.
@@ -306,7 +311,7 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
             b.iter(|| {
                 for o in &orbits {
                     criterion::black_box(
-                        assist_rs::assist_propagate_single(&ephem, o, &targets, false).unwrap(),
+                        assist_rs::assist_propagate_single(&data, o, &targets, false).unwrap(),
                     );
                 }
             });
@@ -316,7 +321,7 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
             b.iter_with_setup(
                 || {
                     assist_rs::PropagatorPool::new(
-                        &ephem,
+                        &data,
                         assist_rs::PropagatorConfig::gravity_only(),
                     )
                     .unwrap()
@@ -336,7 +341,7 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
             b.iter(|| {
                 for o in &orbits {
                     criterion::black_box(
-                        assist_rs::assist_propagate_single(&ephem, o, &targets, true).unwrap(),
+                        assist_rs::assist_propagate_single(&data, o, &targets, true).unwrap(),
                     );
                 }
             });
@@ -346,7 +351,7 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
             b.iter_with_setup(
                 || {
                     assist_rs::PropagatorPool::new(
-                        &ephem,
+                        &data,
                         assist_rs::PropagatorConfig::gravity_with_stm(),
                     )
                     .unwrap()
@@ -377,7 +382,7 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
 /// column within noise. The point of this bench is to guarantee the
 /// convenience API doesn't add overhead.
 fn bench_propagate_batch(c: &mut Criterion) {
-    let Some(ephem) = load_ephem() else { return };
+    let Some(data) = load_data() else { return };
 
     let orbits: Vec<assist_rs::Orbit> = (0..128)
         .map(|i| {
@@ -395,20 +400,20 @@ fn bench_propagate_batch(c: &mut Criterion) {
         b.iter(|| {
             orbits
                 .iter()
-                .map(|o| assist_rs::assist_propagate_single(&ephem, o, &targets, false).unwrap())
+                .map(|o| assist_rs::assist_propagate_single(&data, o, &targets, false).unwrap())
                 .collect::<Vec<_>>()
         });
     });
 
     group.bench_function("batch_api_128", |b| {
-        b.iter(|| assist_rs::assist_propagate(&ephem, &orbits, &targets, false, None).unwrap());
+        b.iter(|| assist_rs::assist_propagate(&data, &orbits, &targets, false, None).unwrap());
     });
 
     group.finish();
 }
 
 fn bench_generate_ephemeris(c: &mut Criterion) {
-    let Some(ephem) = load_ephem() else { return };
+    let Some(data) = load_data() else { return };
 
     let orbit = ceres_orbit();
     let observers: Vec<assist_rs::Observer> = (0..7)
@@ -418,8 +423,7 @@ fn bench_generate_ephemeris(c: &mut Criterion) {
     let mut group = c.benchmark_group("generate_ephemeris");
     group.bench_function("earth_7_observers_30d", |b| {
         b.iter(|| {
-            assist_rs::assist_generate_ephemeris_single(&ephem, &orbit, &observers, None, Some(1))
-                .unwrap()
+            assist_rs::assist_generate_ephemeris_single(&data, &orbit, &observers, Some(1)).unwrap()
         });
     });
     group.finish();

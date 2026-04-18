@@ -1,6 +1,7 @@
 //! `assist_generate_ephemeris_single` — Propagate orbit to observer epochs with
 //! light-time correction and topocentric spherical output.
 
+use crate::assist_data::AssistData;
 use crate::coordinates::{cartesian_to_spherical, ecliptic_to_equatorial, equatorial_to_ecliptic};
 use crate::ffi;
 use crate::observatory::ObservatoryTable;
@@ -53,10 +54,10 @@ impl Observer {
 /// cargo feature is on.
 ///
 /// # Arguments
-/// - `ephem`: ASSIST ephemeris data.
+/// - `data`: bundle holding the ASSIST ephemeris and (for observatory-based
+///   observers) the observatory table.
 /// - `orbit`: initial orbit (state, epoch, optional non-grav params).
 /// - `observers`: observer origins and epochs.
-/// - `obs_table`: optional observatory table (required if any observer is an `Observatory`).
 /// - `num_threads`: `None` → rayon global pool (one worker per core),
 ///   `Some(1)` → serial (no rayon overhead), `Some(n)` for `n > 1` →
 ///   dedicated pool with `n` workers. `Some(0)` returns `Error::Other`.
@@ -66,16 +67,17 @@ impl Observer {
 /// One `EphemerisResult` per observer, in input order regardless of the
 /// threading mode.
 pub fn assist_generate_ephemeris_single(
-    ephem: &Ephemeris,
+    data: &AssistData,
     orbit: &Orbit,
     observers: &[Observer],
-    obs_table: Option<&ObservatoryTable>,
     num_threads: Option<usize>,
 ) -> Result<Vec<EphemerisResult>> {
     if observers.is_empty() {
         return Ok(vec![]);
     }
 
+    let ephem = &data.ephem;
+    let obs_table = data.observatory.as_ref();
     let c = ephem.c_au_per_day();
     let op = |obs: &Observer| -> Result<EphemerisResult> {
         // One simulation per observer — reused across the initial
@@ -105,10 +107,9 @@ pub fn assist_generate_ephemeris_single(
 /// as [`assist_generate_ephemeris_single`] and
 /// [`crate::assist_propagate`].
 pub fn assist_generate_ephemeris(
-    ephem: &Ephemeris,
+    data: &AssistData,
     orbits: &[Orbit],
     observers: &[Observer],
-    obs_table: Option<&ObservatoryTable>,
     num_threads: Option<usize>,
 ) -> Result<Vec<Vec<EphemerisResult>>> {
     if orbits.is_empty() {
@@ -116,9 +117,9 @@ pub fn assist_generate_ephemeris(
     }
     // Each orbit runs the (serial-per-orbit) observer loop.
     let op = |orbit: &Orbit| -> Result<Vec<EphemerisResult>> {
-        // `None` here means "no further parallelism inside this orbit"
+        // `Some(1)` here means "no further parallelism inside this orbit"
         // — observers run serially so we don't nest rayon pools.
-        assist_generate_ephemeris_single(ephem, orbit, observers, obs_table, Some(1))
+        assist_generate_ephemeris_single(data, orbit, observers, Some(1))
     };
     crate::propagate::map_with_threads(orbits, num_threads, op)
 }

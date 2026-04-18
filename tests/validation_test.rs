@@ -77,7 +77,7 @@ fn load_reference_data() -> Option<ReferenceData> {
 /// Propagate a single orbit and compare against reference.
 /// Returns (object_id, max_position_error_au, max_velocity_error).
 fn validate_orbit(
-    ephem: &assist_rs::Ephemeris,
+    data: &assist_rs::AssistData,
     entry: &OrbitEntry,
     non_grav: Option<[f64; 3]>,
 ) -> (String, f64, f64) {
@@ -91,7 +91,7 @@ fn validate_orbit(
     };
     let target_epochs: Vec<f64> = entry.propagated.iter().map(|p| p.epoch).collect();
 
-    let results = assist_rs::assist_propagate_single(ephem, &orbit, &target_epochs, false)
+    let results = assist_rs::assist_propagate_single(data, &orbit, &target_epochs, false)
         .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", entry.object_id));
 
     assert_eq!(
@@ -129,7 +129,7 @@ fn validate_orbit(
 /// out-of-tolerance entries.
 fn run_validation_batch(
     label: &str,
-    ephem: &assist_rs::Ephemeris,
+    data: &assist_rs::AssistData,
     entries: &[OrbitEntry],
     non_grav: Option<[f64; 3]>,
 ) {
@@ -146,7 +146,7 @@ fn run_validation_batch(
 
     let results: Vec<(String, f64, f64)> = entries
         .par_iter()
-        .map(|entry| validate_orbit(ephem, entry, non_grav))
+        .map(|entry| validate_orbit(data, entry, non_grav))
         .collect();
 
     let mut n_pass = 0;
@@ -218,10 +218,11 @@ fn test_validation_against_python() {
 
     let ephem =
         assist_rs::Ephemeris::from_paths(&planets, &asteroids).expect("Failed to load ephemeris");
+    let data = assist_rs::AssistData::new(ephem);
 
     // Propagate all orbits in parallel using rayon.
     // Ephemeris is Send+Sync — each thread creates its own Simulation.
-    run_validation_batch("gravity", &ephem, &reference.orbits, None);
+    run_validation_batch("gravity", &data, &reference.orbits, None);
 }
 
 #[test]
@@ -256,10 +257,11 @@ fn test_nongrav_validation_against_python() {
 
     let ephem =
         assist_rs::Ephemeris::from_paths(&planets, &asteroids).expect("Failed to load ephemeris");
+    let data = assist_rs::AssistData::new(ephem);
 
     run_validation_batch(
         "non-gravitational",
-        &ephem,
+        &data,
         &reference.nongrav_orbits,
         Some(nongrav),
     );
@@ -275,6 +277,7 @@ fn test_rayon_parallel_propagation() {
 
     let ephem =
         assist_rs::Ephemeris::from_paths(&planets, &asteroids).expect("Failed to load ephemeris");
+    let data = assist_rs::AssistData::new(ephem);
 
     // Create 10 copies of a test orbit and propagate in parallel
     let orbit = assist_rs::Orbit::new(
@@ -294,7 +297,7 @@ fn test_rayon_parallel_propagation() {
     let results: Vec<_> = (0..n_orbits)
         .into_par_iter()
         .map(|_| {
-            assist_rs::assist_propagate_single(&ephem, &orbit, &targets, false)
+            assist_rs::assist_propagate_single(&data, &orbit, &targets, false)
                 .expect("Propagation failed")
         })
         .collect();
