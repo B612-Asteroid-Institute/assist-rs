@@ -8,7 +8,7 @@
 //!   cargo bench
 //!
 //! Compares:
-//! - Rust high-level API (`assist_propagate`) which includes coordinate
+//! - Rust high-level API (`assist_propagate_single`) which includes coordinate
 //!   transforms, RAII setup/teardown, and error handling
 //! - Raw C FFI calls (same integration, no coordinate transforms or wrappers)
 //!   to measure the overhead of the Rust API layer
@@ -69,7 +69,9 @@ fn bench_propagate_single(c: &mut Criterion) {
             BenchmarkId::new("rust_api", n_epochs),
             &targets,
             |b, targets| {
-                b.iter(|| assist_rs::assist_propagate(&ephem, &orbit, targets, false).unwrap());
+                b.iter(|| {
+                    assist_rs::assist_propagate_single(&ephem, &orbit, targets, false).unwrap()
+                });
             },
         );
     }
@@ -85,10 +87,10 @@ fn bench_propagate_with_stm(c: &mut Criterion) {
 
     c.benchmark_group("propagate_stm")
         .bench_function("without_stm", |b| {
-            b.iter(|| assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap());
+            b.iter(|| assist_rs::assist_propagate_single(&ephem, &orbit, &targets, false).unwrap());
         })
         .bench_function("with_stm", |b| {
-            b.iter(|| assist_rs::assist_propagate(&ephem, &orbit, &targets, true).unwrap());
+            b.iter(|| assist_rs::assist_propagate_single(&ephem, &orbit, &targets, true).unwrap());
         });
 }
 
@@ -102,10 +104,14 @@ fn bench_propagate_with_nongrav(c: &mut Criterion) {
 
     c.benchmark_group("propagate_nongrav")
         .bench_function("gravity_only", |b| {
-            b.iter(|| assist_rs::assist_propagate(&ephem, &orbit_grav, &targets, false).unwrap());
+            b.iter(|| {
+                assist_rs::assist_propagate_single(&ephem, &orbit_grav, &targets, false).unwrap()
+            });
         })
         .bench_function("with_a2", |b| {
-            b.iter(|| assist_rs::assist_propagate(&ephem, &orbit_ng, &targets, false).unwrap());
+            b.iter(|| {
+                assist_rs::assist_propagate_single(&ephem, &orbit_ng, &targets, false).unwrap()
+            });
         });
 }
 
@@ -180,7 +186,7 @@ fn bench_rust_vs_raw_c(c: &mut Criterion) {
     let mut group = c.benchmark_group("rust_vs_raw_c");
 
     group.bench_function("rust_api", |b| {
-        b.iter(|| assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap());
+        b.iter(|| assist_rs::assist_propagate_single(&ephem, &orbit, &targets, false).unwrap());
     });
 
     group.bench_function("raw_c_ffi", |b| {
@@ -213,7 +219,9 @@ fn bench_parallel_propagation(c: &mut Criterion) {
         b.iter(|| {
             orbits
                 .iter()
-                .map(|orbit| assist_rs::assist_propagate(&ephem, orbit, &targets, false).unwrap())
+                .map(|orbit| {
+                    assist_rs::assist_propagate_single(&ephem, orbit, &targets, false).unwrap()
+                })
                 .collect::<Vec<_>>()
         });
     });
@@ -223,7 +231,9 @@ fn bench_parallel_propagation(c: &mut Criterion) {
         b.iter(|| {
             orbits
                 .par_iter()
-                .map(|orbit| assist_rs::assist_propagate(&ephem, orbit, &targets, false).unwrap())
+                .map(|orbit| {
+                    assist_rs::assist_propagate_single(&ephem, orbit, &targets, false).unwrap()
+                })
                 .collect::<Vec<_>>()
         });
     });
@@ -244,7 +254,7 @@ fn bench_duration_scaling(c: &mut Criterion) {
     for days in [1, 10, 30, 100, 365] {
         let targets = vec![EPOCH + days as f64];
         group.bench_with_input(BenchmarkId::new("days", days), &targets, |b, targets| {
-            b.iter(|| assist_rs::assist_propagate(&ephem, &orbit, targets, false).unwrap());
+            b.iter(|| assist_rs::assist_propagate_single(&ephem, &orbit, targets, false).unwrap());
         });
     }
 
@@ -252,7 +262,7 @@ fn bench_duration_scaling(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// PropagatorPool vs assist_propagate: the pool amortizes REBOUND/ASSIST setup
+// PropagatorPool vs assist_propagate_single: the pool amortizes REBOUND/ASSIST setup
 // (~25 µs / orbit) across many orbits with matching force-model config.
 // Measured by looping N orbits through each path. The per-iteration work of
 // each bench is N full propagations; criterion divides out to per-loop time.
@@ -296,7 +306,7 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
             b.iter(|| {
                 for o in &orbits {
                     criterion::black_box(
-                        assist_rs::assist_propagate(&ephem, o, &targets, false).unwrap(),
+                        assist_rs::assist_propagate_single(&ephem, o, &targets, false).unwrap(),
                     );
                 }
             });
@@ -326,7 +336,7 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
             b.iter(|| {
                 for o in &orbits {
                     criterion::black_box(
-                        assist_rs::assist_propagate(&ephem, o, &targets, true).unwrap(),
+                        assist_rs::assist_propagate_single(&ephem, o, &targets, true).unwrap(),
                     );
                 }
             });
@@ -354,7 +364,7 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// assist_generate_ephemeris — exercises the light-time iteration loop.
+// assist_generate_ephemeris_single — exercises the light-time iteration loop.
 // Picks a 30-day propagation window with the test particle viewed from the
 // geocenter at 7 evenly-spaced observer epochs so the internal EphemerisSim
 // actually benefits from the interpolate-within-last-step shortcut on
@@ -362,7 +372,7 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 /// Compare the batch API against hand-written serial and rayon loops over
-/// `assist_propagate`. With the `parallel` feature enabled (default), the
+/// `assist_propagate_single`. With the `parallel` feature enabled (default), the
 /// batch function internally uses rayon, so it should match the "rayon"
 /// column within noise. The point of this bench is to guarantee the
 /// convenience API doesn't add overhead.
@@ -385,13 +395,13 @@ fn bench_propagate_batch(c: &mut Criterion) {
         b.iter(|| {
             orbits
                 .iter()
-                .map(|o| assist_rs::assist_propagate(&ephem, o, &targets, false).unwrap())
+                .map(|o| assist_rs::assist_propagate_single(&ephem, o, &targets, false).unwrap())
                 .collect::<Vec<_>>()
         });
     });
 
     group.bench_function("batch_api_128", |b| {
-        b.iter(|| assist_rs::assist_propagate_batch(&ephem, &orbits, &targets, false, 0).unwrap());
+        b.iter(|| assist_rs::assist_propagate(&ephem, &orbits, &targets, false, None).unwrap());
     });
 
     group.finish();
@@ -408,7 +418,8 @@ fn bench_generate_ephemeris(c: &mut Criterion) {
     let mut group = c.benchmark_group("generate_ephemeris");
     group.bench_function("earth_7_observers_30d", |b| {
         b.iter(|| {
-            assist_rs::assist_generate_ephemeris(&ephem, &orbit, &observers, None, 1).unwrap()
+            assist_rs::assist_generate_ephemeris_single(&ephem, &orbit, &observers, None, Some(1))
+                .unwrap()
         });
     });
     group.finish();

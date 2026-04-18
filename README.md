@@ -43,12 +43,12 @@ Origin::parse("jupiter")     // → Origin::JupiterBarycenter
 Origin::parse("W84")         // → Origin::Observatory("W84")
 ```
 
-### `assist_propagate`
+### `assist_propagate_single`
 
 N-body propagation of a test particle with optional state transition matrix (STM) via variational equations.
 
 ```rust
-let results = assist_propagate(
+let results = assist_propagate_single(
     &ephem,
     &orbit,              // Orbit (state + epoch + optional non-grav)
     &[t1, t2, t3],      // target epochs (MJD TDB, sorted)
@@ -84,12 +84,12 @@ let earth = assist_get_state(&ephem, &Origin::Earth, &[60000.0, 60001.0], None)?
 let obs = assist_get_state(&ephem, &Origin::Observatory("I11".into()), &[60000.0], Some(&obs_table))?;
 ```
 
-### `assist_generate_ephemeris`
+### `assist_generate_ephemeris_single`
 
 Propagate an orbit to observer epochs with light-time correction, returning topocentric spherical coordinates (range, RA, Dec + rates).
 
 ```rust
-let results = assist_generate_ephemeris(
+let results = assist_generate_ephemeris_single(
     &ephem,
     &orbit,
     &[
@@ -127,7 +127,7 @@ let ng = NonGravParams {
 };
 
 let orbit = Orbit::with_non_grav(state, epoch, ng);
-let results = assist_propagate(&ephem, &orbit, &targets, false)?;
+let results = assist_propagate_single(&ephem, &orbit, &targets, false)?;
 ```
 
 ## Setup

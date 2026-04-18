@@ -66,7 +66,9 @@ fn test_concurrent_assistsim_matches_serial() {
 
     // Serial baseline.
     let serial: Vec<[f64; 6]> = (0..N)
-        .map(|_| assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap()[0].state)
+        .map(|_| {
+            assist_rs::assist_propagate_single(&ephem, &orbit, &targets, false).unwrap()[0].state
+        })
         .collect();
     // All serial runs must be bitwise identical (same IC, same integrator).
     for (i, s) in serial.iter().enumerate().skip(1) {
@@ -80,7 +82,9 @@ fn test_concurrent_assistsim_matches_serial() {
     use rayon::prelude::*;
     let parallel: Vec<[f64; 6]> = (0..N)
         .into_par_iter()
-        .map(|_| assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap()[0].state)
+        .map(|_| {
+            assist_rs::assist_propagate_single(&ephem, &orbit, &targets, false).unwrap()[0].state
+        })
         .collect();
     for (i, p) in parallel.iter().enumerate() {
         assert_eq!(
@@ -198,7 +202,7 @@ fn test_propagate_ceres() {
 
     // Propagate 30 days forward
     let target = [orbit.epoch + 30.0];
-    let results = assist_rs::assist_propagate(&ephem, &orbit, &target, false).unwrap();
+    let results = assist_rs::assist_propagate_single(&ephem, &orbit, &target, false).unwrap();
 
     assert_eq!(results.len(), 1);
     let r = &results[0];
@@ -246,7 +250,7 @@ fn test_propagate_with_stm() {
     );
     let target = [orbit.epoch + 10.0];
 
-    let results = assist_rs::assist_propagate(&ephem, &orbit, &target, true).unwrap();
+    let results = assist_rs::assist_propagate_single(&ephem, &orbit, &target, true).unwrap();
 
     assert_eq!(results.len(), 1);
     let stm = results[0].stm.expect("STM should be populated");
@@ -327,7 +331,8 @@ fn test_generate_ephemeris() {
     let observer = assist_rs::Observer::new(assist_rs::Origin::Earth, 60010.0);
 
     let results =
-        assist_rs::assist_generate_ephemeris(&ephem, &orbit, &[observer], None, 1).unwrap();
+        assist_rs::assist_generate_ephemeris_single(&ephem, &orbit, &[observer], None, Some(1))
+            .unwrap();
 
     assert_eq!(results.len(), 1);
     let eph = &results[0];
@@ -393,12 +398,12 @@ fn test_propagate_with_non_grav() {
 
     // Propagate without non-grav forces (baseline)
     let orbit_grav = assist_rs::Orbit::new(ceres_state, epoch);
-    let baseline = assist_rs::assist_propagate(&ephem, &orbit_grav, &target, false).unwrap();
+    let baseline = assist_rs::assist_propagate_single(&ephem, &orbit_grav, &target, false).unwrap();
 
     // Propagate with a small transverse non-grav acceleration (A2)
     let ng = assist_rs::NonGravParams::new(0.0, 1e-10, 0.0);
     let orbit_ng = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng);
-    let with_ng = assist_rs::assist_propagate(&ephem, &orbit_ng, &target, false).unwrap();
+    let with_ng = assist_rs::assist_propagate_single(&ephem, &orbit_ng, &target, false).unwrap();
 
     // The states should differ
     let dx: f64 = (0..6)
@@ -446,7 +451,7 @@ fn test_nongrav_partials_match_finite_differences() {
     let a = [2e-10, 1e-10, -5e-11];
     let ng = assist_rs::NonGravParams::new(a[0], a[1], a[2]);
     let orbit = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng);
-    let with_partials = assist_rs::assist_propagate(&ephem, &orbit, &target, true).unwrap();
+    let with_partials = assist_rs::assist_propagate_single(&ephem, &orbit, &target, true).unwrap();
     assert!(with_partials[0].stm.is_some(), "STM not populated");
     let partials = with_partials[0]
         .nongrav_partials
@@ -465,8 +470,8 @@ fn test_nongrav_partials_match_finite_differences() {
         let ng_minus = assist_rs::NonGravParams::new(a_minus[0], a_minus[1], a_minus[2]);
         let o_plus = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng_plus);
         let o_minus = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng_minus);
-        let s_plus = assist_rs::assist_propagate(&ephem, &o_plus, &target, false).unwrap();
-        let s_minus = assist_rs::assist_propagate(&ephem, &o_minus, &target, false).unwrap();
+        let s_plus = assist_rs::assist_propagate_single(&ephem, &o_plus, &target, false).unwrap();
+        let s_minus = assist_rs::assist_propagate_single(&ephem, &o_minus, &target, false).unwrap();
 
         for row in 0..6 {
             let fd = (s_plus[0].state[row] - s_minus[0].state[row]) / (2.0 * h);
@@ -501,7 +506,7 @@ fn test_nongrav_partials_absent_without_nongrav() {
         0.001_174_22,
     ];
     let orbit = assist_rs::Orbit::new(ceres_state, 60000.0);
-    let result = assist_rs::assist_propagate(&ephem, &orbit, &[60030.0], true).unwrap();
+    let result = assist_rs::assist_propagate_single(&ephem, &orbit, &[60030.0], true).unwrap();
     assert!(result[0].stm.is_some());
     assert!(
         result[0].nongrav_partials.is_none(),
@@ -552,7 +557,7 @@ fn matrix_max_diff(a: &[[f64; 6]; 6], b: &[[f64; 6]; 6]) -> f64 {
 
 #[test]
 fn test_pool_matches_assist_propagate_gravity_only() {
-    // A pool propagating the same orbit as assist_propagate must produce
+    // A pool propagating the same orbit as assist_propagate_single must produce
     // the identical state (integrator is deterministic with fresh scratch
     // arrays). Tolerance is 1 ULP-ish — rebuilding sim vs reusing sim
     // should not change the IAS15 step sequence at all.
@@ -563,7 +568,7 @@ fn test_pool_matches_assist_propagate_gravity_only() {
     let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
     let targets = [60030.0, 60090.0];
 
-    let reference = assist_rs::assist_propagate(&ephem, &orbit, &targets, false).unwrap();
+    let reference = assist_rs::assist_propagate_single(&ephem, &orbit, &targets, false).unwrap();
 
     let mut pool =
         assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::gravity_only())
@@ -586,7 +591,7 @@ fn test_pool_matches_assist_propagate_with_stm() {
     let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
     let targets = [60030.0];
 
-    let reference = assist_rs::assist_propagate(&ephem, &orbit, &targets, true).unwrap();
+    let reference = assist_rs::assist_propagate_single(&ephem, &orbit, &targets, true).unwrap();
     let mut pool =
         assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::gravity_with_stm())
             .unwrap();
@@ -607,7 +612,7 @@ fn test_pool_matches_assist_propagate_with_stm() {
 #[test]
 fn test_pool_reuse_across_different_orbits() {
     // Propagating three different orbits through the same pool must give
-    // results bitwise identical to running assist_propagate on each
+    // results bitwise identical to running assist_propagate_single on each
     // independently. This is the core correctness invariant: no state
     // leaks between calls.
     let Some(ephem) = load_ephem() else {
@@ -626,7 +631,7 @@ fn test_pool_reuse_across_different_orbits() {
     // Independent reference runs.
     let refs: Vec<Vec<assist_rs::PropagatedState>> = orbits
         .iter()
-        .map(|o| assist_rs::assist_propagate(&ephem, o, &targets, true).unwrap())
+        .map(|o| assist_rs::assist_propagate_single(&ephem, o, &targets, true).unwrap())
         .collect();
 
     // Pooled runs.
@@ -675,7 +680,7 @@ fn test_pool_with_nongrav_partials() {
     let orbit = assist_rs::Orbit::with_non_grav(CERES_STATE, 60000.0, ng);
     let targets = [60030.0];
 
-    let reference = assist_rs::assist_propagate(&ephem, &orbit, &targets, true).unwrap();
+    let reference = assist_rs::assist_propagate_single(&ephem, &orbit, &targets, true).unwrap();
     let mut pool =
         assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::nongrav_with_stm())
             .unwrap();
@@ -749,7 +754,7 @@ fn test_pool_empty_target_list() {
 #[test]
 fn test_propagate_batch_matches_serial_loop() {
     // Batch API must produce bit-identical results to a serial loop of
-    // `assist_propagate`. With the `parallel` feature enabled the batch
+    // `assist_propagate_single`. With the `parallel` feature enabled the batch
     // uses rayon internally; work-stealing order shouldn't change
     // per-orbit numerical results because each orbit runs its own
     // AssistSim.
@@ -764,11 +769,11 @@ fn test_propagate_batch_matches_serial_loop() {
     ];
     let targets = [60030.0, 60090.0, 60365.0];
 
-    let batch = assist_rs::assist_propagate_batch(&ephem, &orbits, &targets, false, 0).unwrap();
+    let batch = assist_rs::assist_propagate(&ephem, &orbits, &targets, false, None).unwrap();
     assert_eq!(batch.len(), orbits.len());
 
     for (i, orbit) in orbits.iter().enumerate() {
-        let serial = assist_rs::assist_propagate(&ephem, orbit, &targets, false).unwrap();
+        let serial = assist_rs::assist_propagate_single(&ephem, orbit, &targets, false).unwrap();
         assert_eq!(batch[i].len(), serial.len());
         for (j, (b, s)) in batch[i].iter().zip(serial.iter()).enumerate() {
             assert_eq!(
@@ -785,7 +790,7 @@ fn test_propagate_batch_empty_orbits() {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
-    let result = assist_rs::assist_propagate_batch(&ephem, &[], &[60030.0], false, 0).unwrap();
+    let result = assist_rs::assist_propagate(&ephem, &[], &[60030.0], false, None).unwrap();
     assert!(result.is_empty());
 }
 
@@ -806,10 +811,13 @@ fn test_propagate_batch_num_threads_modes_agree() {
     ];
     let targets = [60030.0];
 
-    let default_pool =
-        assist_rs::assist_propagate_batch(&ephem, &orbits, &targets, false, 0).unwrap();
-    for (nt, label) in [(1, "serial"), (2, "2 threads"), (4, "4 threads")] {
-        let got = assist_rs::assist_propagate_batch(&ephem, &orbits, &targets, false, nt).unwrap();
+    let default_pool = assist_rs::assist_propagate(&ephem, &orbits, &targets, false, None).unwrap();
+    for (nt, label) in [
+        (Some(1), "serial"),
+        (Some(2), "2 threads"),
+        (Some(4), "4 threads"),
+    ] {
+        let got = assist_rs::assist_propagate(&ephem, &orbits, &targets, false, nt).unwrap();
         for i in 0..orbits.len() {
             assert_eq!(
                 default_pool[i][0].state, got[i][0].state,
@@ -831,15 +839,61 @@ fn test_generate_ephemeris_num_threads_modes_agree() {
         .collect();
 
     let default_pool =
-        assist_rs::assist_generate_ephemeris(&ephem, &orbit, &observers, None, 0).unwrap();
-    for (nt, label) in [(1, "serial"), (3, "3 threads")] {
-        let got =
-            assist_rs::assist_generate_ephemeris(&ephem, &orbit, &observers, None, nt).unwrap();
+        assist_rs::assist_generate_ephemeris_single(&ephem, &orbit, &observers, None, None)
+            .unwrap();
+    for (nt, label) in [(Some(1), "serial"), (Some(3), "3 threads")] {
+        let got = assist_rs::assist_generate_ephemeris_single(&ephem, &orbit, &observers, None, nt)
+            .unwrap();
         for i in 0..observers.len() {
             assert_eq!(
                 default_pool[i].spherical, got[i].spherical,
                 "observer {i} / {label}: spherical differs"
             );
+        }
+    }
+}
+
+#[test]
+fn test_generate_ephemeris_batch_matches_per_orbit_single() {
+    // The batched `assist_generate_ephemeris(&[Orbit])` must produce the
+    // same results as calling `_single` once per orbit in a serial loop.
+    // This guards against regressions in how we dispatch orbits through
+    // rayon (parallel over orbits).
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let orbits = vec![
+        assist_rs::Orbit::new(CERES_STATE, 60000.0),
+        assist_rs::Orbit::new(PALLAS_STATE, 60000.0),
+        assist_rs::Orbit::new(JUNO_STATE, 60000.0),
+    ];
+    let observers: Vec<_> = (0..4)
+        .map(|i| assist_rs::Observer::new(assist_rs::Origin::Earth, 60000.0 + 7.0 * i as f64))
+        .collect();
+
+    // Reference: loop over orbits, call single per orbit.
+    let reference: Vec<Vec<assist_rs::EphemerisResult>> = orbits
+        .iter()
+        .map(|o| {
+            assist_rs::assist_generate_ephemeris_single(&ephem, o, &observers, None, Some(1))
+                .unwrap()
+        })
+        .collect();
+
+    // Batch, both serial and parallel modes should match.
+    for nt in [Some(1), None, Some(2)] {
+        let got =
+            assist_rs::assist_generate_ephemeris(&ephem, &orbits, &observers, None, nt).unwrap();
+        assert_eq!(got.len(), orbits.len());
+        for (i, (ref_orbit, got_orbit)) in reference.iter().zip(&got).enumerate() {
+            assert_eq!(got_orbit.len(), observers.len());
+            for (j, (r, g)) in ref_orbit.iter().zip(got_orbit).enumerate() {
+                assert_eq!(
+                    r.spherical, g.spherical,
+                    "orbit {i} / observer {j} / num_threads={nt:?}: spherical differs"
+                );
+            }
         }
     }
 }
