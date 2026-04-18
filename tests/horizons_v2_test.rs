@@ -275,8 +275,9 @@ fn test_propagation_against_horizons() {
                 .map(|v| jd_to_mjd(v.jd_tdb))
                 .collect();
 
-            let propagated = assist_rs::assist_propagate(&ephem, &orbit, &target_epochs, false)
-                .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", entry.object_id));
+            let propagated =
+                assist_rs::assist_propagate_single(&ephem, &orbit, &target_epochs, false)
+                    .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", entry.object_id));
 
             let mut rows: Vec<(f64, f64, f64)> = Vec::new(); // (dt, pos_err_m, vel_err_m_s)
             for (prop, href) in propagated.iter().zip(entry.vectors_bary_eq.iter()) {
@@ -438,12 +439,12 @@ fn test_ephemeris_against_horizons_v2() {
                 })
                 .collect();
 
-            let predicted = assist_rs::assist_generate_ephemeris(
+            let predicted = assist_rs::assist_generate_ephemeris_single(
                 &ephem,
                 &orbit,
                 &observers,
                 Some(&obs_table),
-                1,
+                Some(1),
             )
             .unwrap_or_else(|e| {
                 panic!(

@@ -1,4 +1,4 @@
-//! `assist_generate_ephemeris` — Propagate orbit to observer epochs with
+//! `assist_generate_ephemeris_single` — Propagate orbit to observer epochs with
 //! light-time correction and topocentric spherical output.
 
 use crate::coordinates::{cartesian_to_spherical, ecliptic_to_equatorial, equatorial_to_ecliptic};
@@ -57,19 +57,20 @@ impl Observer {
 /// - `orbit`: initial orbit (state, epoch, optional non-grav params).
 /// - `observers`: observer origins and epochs.
 /// - `obs_table`: optional observatory table (required if any observer is an `Observatory`).
-/// - `num_threads`: `0` → rayon global pool (one worker per core),
-///   `1` → serial (no rayon overhead), `n > 1` → dedicated pool with `n` workers.
+/// - `num_threads`: `None` → rayon global pool (one worker per core),
+///   `Some(1)` → serial (no rayon overhead), `Some(n)` for `n > 1` →
+///   dedicated pool with `n` workers. `Some(0)` returns `Error::Other`.
 ///   Ignored without the `parallel` feature.
 ///
 /// # Returns
 /// One `EphemerisResult` per observer, in input order regardless of the
 /// threading mode.
-pub fn assist_generate_ephemeris(
+pub fn assist_generate_ephemeris_single(
     ephem: &Ephemeris,
     orbit: &Orbit,
     observers: &[Observer],
     obs_table: Option<&ObservatoryTable>,
-    num_threads: usize,
+    num_threads: Option<usize>,
 ) -> Result<Vec<EphemerisResult>> {
     if observers.is_empty() {
         return Ok(vec![]);
@@ -83,6 +84,43 @@ pub fn assist_generate_ephemeris(
         compute_single_ephemeris(ephem, &mut sim, obs, c, obs_table)
     };
     crate::propagate::map_with_threads(observers, num_threads, op)
+}
+
+/// Generate ephemeris for many orbits viewed from a shared set of observers.
+///
+/// Shape: the returned `Vec<Vec<EphemerisResult>>` is indexed
+/// `[orbit_index][observer_index]`.
+///
+/// Parallelism is across orbits. Within each orbit the observer loop runs
+/// serially, reusing one `EphemerisSim` across observers (and exploiting
+/// `assist_integrate_or_interpolate`'s in-step interpolation for
+/// close-together observer epochs). When orbits outnumber cores — the
+/// typical OD / catalog-wide case — this is the right axis to split on.
+///
+/// For the reverse case (one orbit, many observers that benefit from
+/// splitting), use [`assist_generate_ephemeris_single`] with a non-trivial
+/// `num_threads` instead.
+///
+/// `num_threads` follows the same `None` / `Some(1)` / `Some(n)` convention
+/// as [`assist_generate_ephemeris_single`] and
+/// [`crate::assist_propagate`].
+pub fn assist_generate_ephemeris(
+    ephem: &Ephemeris,
+    orbits: &[Orbit],
+    observers: &[Observer],
+    obs_table: Option<&ObservatoryTable>,
+    num_threads: Option<usize>,
+) -> Result<Vec<Vec<EphemerisResult>>> {
+    if orbits.is_empty() {
+        return Ok(vec![]);
+    }
+    // Each orbit runs the (serial-per-orbit) observer loop.
+    let op = |orbit: &Orbit| -> Result<Vec<EphemerisResult>> {
+        // `None` here means "no further parallelism inside this orbit"
+        // — observers run serially so we don't nest rayon pools.
+        assist_generate_ephemeris_single(ephem, orbit, observers, obs_table, Some(1))
+    };
+    crate::propagate::map_with_threads(orbits, num_threads, op)
 }
 
 /// Compute ephemeris for a single observer with light-time iteration.

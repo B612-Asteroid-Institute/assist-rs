@@ -1,8 +1,8 @@
-//! `assist_propagate` — N-body propagation of a test particle.
+//! `assist_propagate_single` — N-body propagation of a test particle.
 //!
 //! Two entry points:
 //!
-//! * [`assist_propagate`] — one-shot free function. Creates a fresh
+//! * [`assist_propagate_single`] — one-shot free function. Creates a fresh
 //!   `AssistSim`, propagates, and tears down on return.
 //! * [`PropagatorPool`] — stateful container that reuses the underlying
 //!   `AssistSim` (and its REBOUND simulation, ASSIST extras, and IAS15
@@ -136,7 +136,7 @@ fn covariance_9x9(stm: &[[f64; 6]; 6], ng: &[[f64; 3]; 6], p0: &[[f64; 9]; 9]) -
 ///
 /// # Returns
 /// One `PropagatedState` per target epoch, in the same order.
-pub fn assist_propagate(
+pub fn assist_propagate_single(
     ephem: &Ephemeris,
     orbit: &Orbit,
     target_epochs: &[f64],
@@ -184,16 +184,19 @@ pub fn assist_propagate(
 ///
 /// `num_threads` controls how work is distributed:
 ///
-/// * `0` — use rayon's default global pool (typically one worker per CPU
-///   core). Best for single-process workloads that want maximum throughput.
-/// * `1` — serial loop, no rayon scheduling overhead. Equivalent to
-///   `orbits.iter().map(|o| assist_propagate(...)).collect()`.
-/// * `n > 1` — build a dedicated rayon thread pool with exactly `n`
-///   workers and run the batch inside it. Useful when the caller already
-///   parallelizes at a higher level and wants to bound the per-call
-///   concurrency.
+/// * `None` — use rayon's default global pool (typically one worker per
+///   CPU core). Best for single-process workloads that want maximum
+///   throughput.
+/// * `Some(1)` — serial loop, no rayon scheduling overhead. Equivalent
+///   to `orbits.iter().map(|o| assist_propagate_single(...)).collect()`.
+/// * `Some(n)` for `n > 1` — build a dedicated rayon thread pool with
+///   exactly `n` workers and run the batch inside it. Useful when the
+///   caller already parallelizes at a higher level and wants to bound
+///   the per-call concurrency.
 ///
-/// Each orbit still pays its own [`assist_propagate`] setup cost (~1 µs of
+/// `Some(0)` returns `Error::Other` — use `None` for "default".
+///
+/// Each orbit still pays its own [`assist_propagate_single`] setup cost (~1 µs of
 /// `reb_simulation_create` + `assist_attach`); the parallel win is the
 /// embarrassingly-parallel map across orbits. `Ephemeris` is `Send + Sync`
 /// so one ephemeris serves all worker threads.
@@ -203,37 +206,47 @@ pub fn assist_propagate(
 ///
 /// # Errors
 /// Returns the first error encountered across any orbit's propagation.
-pub fn assist_propagate_batch(
+pub fn assist_propagate(
     ephem: &Ephemeris,
     orbits: &[Orbit],
     target_epochs: &[f64],
     compute_stm: bool,
-    num_threads: usize,
+    num_threads: Option<usize>,
 ) -> Result<Vec<Vec<PropagatedState>>> {
-    let op = |orbit: &Orbit| assist_propagate(ephem, orbit, target_epochs, compute_stm);
+    let op = |orbit: &Orbit| assist_propagate_single(ephem, orbit, target_epochs, compute_stm);
     map_with_threads(orbits, num_threads, op)
 }
 
-/// Dispatch a fallible per-item function across `items` using `num_threads`
-/// rayon workers (0 = global pool, 1 = serial, n = custom pool).
+/// Dispatch a fallible per-item function across `items`:
+/// `None` = rayon's global pool, `Some(1)` = serial, `Some(n)` = custom
+/// pool with `n` workers. `Some(0)` is an error.
 ///
-/// Factored out so [`assist_propagate_batch`] and
-/// [`crate::ephemeris::assist_generate_ephemeris`] share one dispatch
+/// Factored out so [`assist_propagate`] and
+/// [`crate::ephemeris::assist_generate_ephemeris_single`] share one dispatch
 /// implementation. `Send + Sync` bounds are required on `T` and the
 /// closure's captures because rayon moves work across threads.
-pub(crate) fn map_with_threads<T, U, F>(items: &[T], num_threads: usize, f: F) -> Result<Vec<U>>
+pub(crate) fn map_with_threads<T, U, F>(
+    items: &[T],
+    num_threads: Option<usize>,
+    f: F,
+) -> Result<Vec<U>>
 where
     T: Sync,
     U: Send,
     F: Fn(&T) -> Result<U> + Send + Sync,
 {
+    if num_threads == Some(0) {
+        return Err(Error::Other(
+            "num_threads = Some(0) is not valid; use None for the default pool".into(),
+        ));
+    }
     #[cfg(feature = "parallel")]
     {
         use rayon::prelude::*;
         match num_threads {
-            0 => items.par_iter().map(&f).collect(),
-            1 => items.iter().map(&f).collect(),
-            n => {
+            None => items.par_iter().map(&f).collect(),
+            Some(1) => items.iter().map(&f).collect(),
+            Some(n) => {
                 let pool = rayon::ThreadPoolBuilder::new()
                     .num_threads(n)
                     .build()
@@ -299,7 +312,7 @@ impl PropagatorConfig {
 /// installs a zeroed `particle_params` array of the right size. Each call
 /// to [`propagate`] rewrites particle state in place, resets the IAS15
 /// integrator's scratch arrays, and re-runs the integration loop —
-/// avoiding the ~25 µs per-orbit setup cost that [`assist_propagate`] pays.
+/// avoiding the ~25 µs per-orbit setup cost that [`assist_propagate_single`] pays.
 ///
 /// The pool is stateful and not thread-safe; clone [`Ephemeris`] (which is
 /// `Send + Sync`) and build one pool per worker thread.
@@ -435,7 +448,7 @@ impl<'a> PropagatorPool<'a> {
     }
 }
 
-// ─── Private helpers shared by assist_propagate and PropagatorPool ──────────
+// ─── Private helpers shared by assist_propagate_single and PropagatorPool ──────────
 
 /// Heliocentric ecliptic J2000 → barycentric equatorial ICRF at ASSIST time `t`.
 fn ecl_orbit_to_bary_eq(ecl_state: &[f64; 6], ephem: &Ephemeris, t: f64) -> Result<[f64; 6]> {
