@@ -43,13 +43,28 @@ Origin::parse("jupiter")     // → Origin::JupiterBarycenter
 Origin::parse("W84")         // → Origin::Observatory("W84")
 ```
 
-### `assist_propagate_single`
+### `AssistData`
 
-N-body propagation of a test particle with optional state transition matrix (STM) via variational equations.
+Bundle of the data resources every high-level entry point needs: the JPL SPK `Ephemeris`, and optionally an `ObservatoryTable` (which itself may carry an `EarthOrientation` for sub-mas observatory rotation). Load once, pass by reference to every `assist_*` call:
+
+```rust
+let ephem = Ephemeris::from_paths(planets, asteroids)?;
+
+// Minimal: propagation / named-body state queries only
+let data = AssistData::new(ephem);
+
+// With observatory support (required for Origin::Observatory queries and
+// ground-based observers)
+let data = AssistData::new(ephem).with_observatory(obs_table);
+```
+
+### `assist_propagate` / `assist_propagate_single`
+
+N-body propagation of a test particle with optional state transition matrix (STM) via variational equations. `assist_propagate` takes many orbits and parallelizes across them; `_single` takes one orbit.
 
 ```rust
 let results = assist_propagate_single(
-    &ephem,
+    &data,
     &orbit,              // Orbit (state + epoch + optional non-grav)
     &[t1, t2, t3],      // target epochs (MJD TDB, sorted)
     true,                // compute STM
@@ -75,28 +90,29 @@ Both return `None` when the required partials are absent.
 
 ### `assist_get_state`
 
-Query the state of any solar system body or ground observatory at one or more epochs.
+Query the state of any solar system body or ground observatory at one or more epochs. The fourth argument is `num_threads` (`None` = rayon global pool, `Some(1)` = serial).
 
 ```rust
-let earth = assist_get_state(&ephem, &Origin::Earth, &[60000.0, 60001.0], None)?;
+let earth = assist_get_state(&data, &Origin::Earth, &[60000.0, 60001.0], Some(1))?;
 // earth[0].state -> [f64; 6] heliocentric ecliptic J2000
 
-let obs = assist_get_state(&ephem, &Origin::Observatory("I11".into()), &[60000.0], Some(&obs_table))?;
+let obs = assist_get_state(&data, &Origin::Observatory("I11".into()), &[60000.0], Some(1))?;
+// `data` must have been built with `.with_observatory(..)` for this
 ```
 
-### `assist_generate_ephemeris_single`
+### `assist_generate_ephemeris` / `assist_generate_ephemeris_single`
 
-Propagate an orbit to observer epochs with light-time correction, returning topocentric spherical coordinates (range, RA, Dec + rates).
+Propagate an orbit to observer epochs with light-time correction, returning topocentric spherical coordinates (range, RA, Dec + rates). `assist_generate_ephemeris` takes many orbits and parallelizes across them; `_single` takes one.
 
 ```rust
 let results = assist_generate_ephemeris_single(
-    &ephem,
+    &data,               // must include .with_observatory(..) for ground observatories
     &orbit,
     &[
         Observer::new(Origin::Earth, 60010.0),
         Observer::new(Origin::Observatory("I11".into()), 60011.0),
     ],
-    Some(&obs_table),  // required if any observer is an Observatory
+    Some(1),             // num_threads: None = global pool, Some(1) = serial
 )?;
 // results[i].spherical      -> [rho, ra, dec, drho, dra, ddec]
 // results[i].aberrated_state -> [f64; 6] light-time-corrected heliocentric
@@ -127,7 +143,7 @@ let ng = NonGravParams {
 };
 
 let orbit = Orbit::with_non_grav(state, epoch, ng);
-let results = assist_propagate_single(&ephem, &orbit, &targets, false)?;
+let results = assist_propagate_single(&data, &orbit, &targets, false)?;
 ```
 
 ## Setup
@@ -189,6 +205,7 @@ let ephem = Ephemeris::from_paths(&paths.planets, &paths.asteroids)?;
 let eo = EarthOrientation::from_paths(&paths.eop_kernels())?;
 let obs_table = ObservatoryTable::from_json(&paths.obscodes)?
     .with_earth_orientation(eo);
+let data = AssistData::new(ephem).with_observatory(obs_table);
 ```
 
 `paths.eop_kernels()` returns the three EOP kernel paths in SPICE-idiomatic order (predict, historical, current) so the high-precision kernel wins at epochs it covers.

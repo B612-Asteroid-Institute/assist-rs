@@ -9,6 +9,7 @@
 //!   allocations) across many orbits with the same force-model +
 //!   variational-dimension configuration.
 
+use crate::assist_data::AssistData;
 use crate::coordinates::{ecliptic_to_equatorial, equatorial_to_ecliptic, rotate_matrix_eq_to_ecl};
 use crate::ffi;
 use crate::orbit::{NonGravParams, Orbit};
@@ -129,7 +130,8 @@ fn covariance_9x9(stm: &[[f64; 6]; 6], ng: &[[f64; 3]; 6], p0: &[[f64; 9]; 9]) -
 /// amortizes the ~25 µs REBOUND/ASSIST setup across calls.
 ///
 /// # Arguments
-/// - `ephem`: ASSIST ephemeris data.
+/// - `data`: bundle holding the ASSIST ephemeris (observatory table unused
+///   here — propagation never needs it).
 /// - `orbit`: initial orbit (state, epoch, optional non-grav params).
 /// - `target_epochs`: sorted slice of target epochs (MJD TDB).
 /// - `compute_stm`: whether to compute the state transition matrix via variational equations.
@@ -137,7 +139,7 @@ fn covariance_9x9(stm: &[[f64; 6]; 6], ng: &[[f64; 3]; 6], p0: &[[f64; 9]; 9]) -
 /// # Returns
 /// One `PropagatedState` per target epoch, in the same order.
 pub fn assist_propagate_single(
-    ephem: &Ephemeris,
+    data: &AssistData,
     orbit: &Orbit,
     target_epochs: &[f64],
     compute_stm: bool,
@@ -146,6 +148,7 @@ pub fn assist_propagate_single(
         return Ok(vec![]);
     }
 
+    let ephem = &data.ephem;
     let jd_ref = ephem.jd_ref();
     let t0 = mjd_to_assist_time(orbit.epoch, jd_ref);
 
@@ -207,13 +210,13 @@ pub fn assist_propagate_single(
 /// # Errors
 /// Returns the first error encountered across any orbit's propagation.
 pub fn assist_propagate(
-    ephem: &Ephemeris,
+    data: &AssistData,
     orbits: &[Orbit],
     target_epochs: &[f64],
     compute_stm: bool,
     num_threads: Option<usize>,
 ) -> Result<Vec<Vec<PropagatedState>>> {
-    let op = |orbit: &Orbit| assist_propagate_single(ephem, orbit, target_epochs, compute_stm);
+    let op = |orbit: &Orbit| assist_propagate_single(data, orbit, target_epochs, compute_stm);
     map_with_threads(orbits, num_threads, op)
 }
 
@@ -318,9 +321,9 @@ impl PropagatorConfig {
 /// `Send + Sync`) and build one pool per worker thread.
 ///
 /// ```no_run
-/// # use assist_rs::{Ephemeris, Orbit, propagate::{PropagatorPool, PropagatorConfig}};
-/// # fn run(ephem: &Ephemeris, orbits: &[Orbit], targets: &[f64]) -> Result<(), Box<dyn std::error::Error>> {
-/// let mut pool = PropagatorPool::new(ephem, PropagatorConfig::gravity_with_stm())?;
+/// # use assist_rs::{AssistData, Orbit, propagate::{PropagatorPool, PropagatorConfig}};
+/// # fn run(data: &AssistData, orbits: &[Orbit], targets: &[f64]) -> Result<(), Box<dyn std::error::Error>> {
+/// let mut pool = PropagatorPool::new(data, PropagatorConfig::gravity_with_stm())?;
 /// for orbit in orbits {
 ///     let result = pool.propagate(orbit, targets)?;
 ///     // ... use result[0].state, result[0].stm ...
@@ -343,10 +346,13 @@ impl<'a> PropagatorPool<'a> {
     ///
     /// Placeholder state is installed for the real test particle (zeros) and
     /// the variational particles (unit perturbations / zeros as required);
-    /// these are overwritten by the first [`propagate`] call.
+    /// these are overwritten by the first [`propagate`] call. The pool
+    /// borrows `data` for the ephemeris; `data.observatory` is not used by
+    /// the propagator.
     ///
     /// [`propagate`]: PropagatorPool::propagate
-    pub fn new(ephem: &'a Ephemeris, config: PropagatorConfig) -> Result<Self> {
+    pub fn new(data: &'a AssistData, config: PropagatorConfig) -> Result<Self> {
+        let ephem = &data.ephem;
         let jd_ref = ephem.jd_ref();
         let mut sim = Simulation::new()?;
         sim.set_t(0.0);

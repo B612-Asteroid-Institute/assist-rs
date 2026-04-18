@@ -250,6 +250,7 @@ fn test_propagation_against_horizons() {
     };
     let ephem =
         assist_rs::Ephemeris::from_paths(&planets, &asteroids).expect("Failed to load ephemeris");
+    let data = assist_rs::AssistData::new(ephem);
 
     eprintln!(
         "Propagation test: {} orbits, dt = {:?} days",
@@ -267,7 +268,7 @@ fn test_propagation_against_horizons() {
             let epoch_mjd = jd_to_mjd(entry.sbdb_epoch_jd_tdb);
             let ic = &entry.vectors_bary_eq[0];
             let ic_arr = [ic.x, ic.y, ic.z, ic.vx, ic.vy, ic.vz];
-            let orbit = build_orbit(&ic_arr, epoch_mjd, entry.non_grav.as_ref(), &ephem);
+            let orbit = build_orbit(&ic_arr, epoch_mjd, entry.non_grav.as_ref(), &data.ephem);
 
             let target_epochs: Vec<f64> = entry
                 .vectors_bary_eq
@@ -276,12 +277,13 @@ fn test_propagation_against_horizons() {
                 .collect();
 
             let propagated =
-                assist_rs::assist_propagate_single(&ephem, &orbit, &target_epochs, false)
+                assist_rs::assist_propagate_single(&data, &orbit, &target_epochs, false)
                     .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", entry.object_id));
 
             let mut rows: Vec<(f64, f64, f64)> = Vec::new(); // (dt, pos_err_m, vel_err_m_s)
             for (prop, href) in propagated.iter().zip(entry.vectors_bary_eq.iter()) {
-                let bary_eq = helio_ecl_to_bary_eq(&prop.state, &ephem, jd_to_mjd(href.jd_tdb));
+                let bary_eq =
+                    helio_ecl_to_bary_eq(&prop.state, &data.ephem, jd_to_mjd(href.jd_tdb));
                 let dp = [
                     bary_eq[0] - href.x,
                     bary_eq[1] - href.y,
@@ -390,8 +392,9 @@ fn test_ephemeris_against_horizons_v2() {
 
     let ephem =
         assist_rs::Ephemeris::from_paths(&planets, &asteroids).expect("Failed to load ephemeris");
+    let data = assist_rs::AssistData::new(ephem).with_observatory(obs_table);
 
-    let c_au_day = ephem.c_au_per_day();
+    let c_au_day = data.ephem.c_au_per_day();
     let rad_to_mas = 180.0 / std::f64::consts::PI * 3600.0 * 1000.0;
     // rad/day → arcsec/hr
     let rad_day_to_arcsec_hr = 206_264.806_247_096_36 / 24.0;
@@ -422,7 +425,7 @@ fn test_ephemeris_against_horizons_v2() {
             let epoch_mjd = jd_to_mjd(entry.sbdb_epoch_jd_tdb);
             let ic = &entry.vectors_bary_eq[0];
             let ic_arr = [ic.x, ic.y, ic.z, ic.vx, ic.vy, ic.vz];
-            let orbit = build_orbit(&ic_arr, epoch_mjd, entry.non_grav.as_ref(), &ephem);
+            let orbit = build_orbit(&ic_arr, epoch_mjd, entry.non_grav.as_ref(), &data.ephem);
 
             let horizons_obs = entry
                 .observer_ephemeris
@@ -439,19 +442,14 @@ fn test_ephemeris_against_horizons_v2() {
                 })
                 .collect();
 
-            let predicted = assist_rs::assist_generate_ephemeris_single(
-                &ephem,
-                &orbit,
-                &observers,
-                Some(&obs_table),
-                Some(1),
-            )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Ephemeris failed for {} @ {}: {e}",
-                    entry.object_id, obs_code
-                )
-            });
+            let predicted =
+                assist_rs::assist_generate_ephemeris_single(&data, &orbit, &observers, Some(1))
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "Ephemeris failed for {} @ {}: {e}",
+                            entry.object_id, obs_code
+                        )
+                    });
 
             let mut rows = Vec::new();
             for (pr, href) in predicted.iter().zip(horizons_obs.iter()) {

@@ -19,6 +19,10 @@ fn load_ephem() -> Option<assist_rs::Ephemeris> {
     assist_rs::Ephemeris::from_paths(&planets, &asteroids).ok()
 }
 
+fn load_data() -> Option<assist_rs::AssistData> {
+    load_ephem().map(assist_rs::AssistData::new)
+}
+
 #[test]
 fn test_create_simulation() {
     // No ephemeris needed — just test that REBOUND creates/frees cleanly.
@@ -45,7 +49,7 @@ fn test_concurrent_assistsim_matches_serial() {
     // many times in parallel and serially, and assert bit-for-bit equal
     // results. A hidden race on global state would show up as nondeterministic
     // output across runs or between the serial and parallel paths.
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -67,7 +71,7 @@ fn test_concurrent_assistsim_matches_serial() {
     // Serial baseline.
     let serial: Vec<[f64; 6]> = (0..N)
         .map(|_| {
-            assist_rs::assist_propagate_single(&ephem, &orbit, &targets, false).unwrap()[0].state
+            assist_rs::assist_propagate_single(&data, &orbit, &targets, false).unwrap()[0].state
         })
         .collect();
     // All serial runs must be bitwise identical (same IC, same integrator).
@@ -83,7 +87,7 @@ fn test_concurrent_assistsim_matches_serial() {
     let parallel: Vec<[f64; 6]> = (0..N)
         .into_par_iter()
         .map(|_| {
-            assist_rs::assist_propagate_single(&ephem, &orbit, &targets, false).unwrap()[0].state
+            assist_rs::assist_propagate_single(&data, &orbit, &targets, false).unwrap()[0].state
         })
         .collect();
     for (i, p) in parallel.iter().enumerate() {
@@ -182,7 +186,7 @@ fn test_create_assist_sim() {
 
 #[test]
 fn test_propagate_ceres() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -202,7 +206,7 @@ fn test_propagate_ceres() {
 
     // Propagate 30 days forward
     let target = [orbit.epoch + 30.0];
-    let results = assist_rs::assist_propagate_single(&ephem, &orbit, &target, false).unwrap();
+    let results = assist_rs::assist_propagate_single(&data, &orbit, &target, false).unwrap();
 
     assert_eq!(results.len(), 1);
     let r = &results[0];
@@ -232,7 +236,7 @@ fn test_propagate_ceres() {
 
 #[test]
 fn test_propagate_with_stm() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -250,7 +254,7 @@ fn test_propagate_with_stm() {
     );
     let target = [orbit.epoch + 10.0];
 
-    let results = assist_rs::assist_propagate_single(&ephem, &orbit, &target, true).unwrap();
+    let results = assist_rs::assist_propagate_single(&data, &orbit, &target, true).unwrap();
 
     assert_eq!(results.len(), 1);
     let stm = results[0].stm.expect("STM should be populated");
@@ -272,14 +276,14 @@ fn test_propagate_with_stm() {
 
 #[test]
 fn test_get_state() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
 
     // Get Sun's heliocentric state (should be ~0)
     let sun =
-        assist_rs::assist_get_state(&ephem, &assist_rs::Origin::Sun, &[60000.0], None).unwrap();
+        assist_rs::assist_get_state(&data, &assist_rs::Origin::Sun, &[60000.0], None).unwrap();
     let sun_dist = (sun[0].state[0] * sun[0].state[0]
         + sun[0].state[1] * sun[0].state[1]
         + sun[0].state[2] * sun[0].state[2])
@@ -291,7 +295,7 @@ fn test_get_state() {
 
     // Get Earth's heliocentric state
     let earth =
-        assist_rs::assist_get_state(&ephem, &assist_rs::Origin::Earth, &[60000.0], None).unwrap();
+        assist_rs::assist_get_state(&data, &assist_rs::Origin::Earth, &[60000.0], None).unwrap();
     let earth_dist = (earth[0].state[0] * earth[0].state[0]
         + earth[0].state[1] * earth[0].state[1]
         + earth[0].state[2] * earth[0].state[2])
@@ -309,7 +313,7 @@ fn test_get_state() {
 
 #[test]
 fn test_generate_ephemeris() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -331,8 +335,7 @@ fn test_generate_ephemeris() {
     let observer = assist_rs::Observer::new(assist_rs::Origin::Earth, 60010.0);
 
     let results =
-        assist_rs::assist_generate_ephemeris_single(&ephem, &orbit, &[observer], None, Some(1))
-            .unwrap();
+        assist_rs::assist_generate_ephemeris_single(&data, &orbit, &[observer], Some(1)).unwrap();
 
     assert_eq!(results.len(), 1);
     let eph = &results[0];
@@ -380,7 +383,7 @@ fn test_generate_ephemeris() {
 
 #[test]
 fn test_propagate_with_non_grav() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -398,12 +401,12 @@ fn test_propagate_with_non_grav() {
 
     // Propagate without non-grav forces (baseline)
     let orbit_grav = assist_rs::Orbit::new(ceres_state, epoch);
-    let baseline = assist_rs::assist_propagate_single(&ephem, &orbit_grav, &target, false).unwrap();
+    let baseline = assist_rs::assist_propagate_single(&data, &orbit_grav, &target, false).unwrap();
 
     // Propagate with a small transverse non-grav acceleration (A2)
     let ng = assist_rs::NonGravParams::new(0.0, 1e-10, 0.0);
     let orbit_ng = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng);
-    let with_ng = assist_rs::assist_propagate_single(&ephem, &orbit_ng, &target, false).unwrap();
+    let with_ng = assist_rs::assist_propagate_single(&data, &orbit_ng, &target, false).unwrap();
 
     // The states should differ
     let dx: f64 = (0..6)
@@ -431,7 +434,7 @@ fn test_propagate_with_non_grav() {
 
 #[test]
 fn test_nongrav_partials_match_finite_differences() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -451,7 +454,7 @@ fn test_nongrav_partials_match_finite_differences() {
     let a = [2e-10, 1e-10, -5e-11];
     let ng = assist_rs::NonGravParams::new(a[0], a[1], a[2]);
     let orbit = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng);
-    let with_partials = assist_rs::assist_propagate_single(&ephem, &orbit, &target, true).unwrap();
+    let with_partials = assist_rs::assist_propagate_single(&data, &orbit, &target, true).unwrap();
     assert!(with_partials[0].stm.is_some(), "STM not populated");
     let partials = with_partials[0]
         .nongrav_partials
@@ -470,8 +473,8 @@ fn test_nongrav_partials_match_finite_differences() {
         let ng_minus = assist_rs::NonGravParams::new(a_minus[0], a_minus[1], a_minus[2]);
         let o_plus = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng_plus);
         let o_minus = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng_minus);
-        let s_plus = assist_rs::assist_propagate_single(&ephem, &o_plus, &target, false).unwrap();
-        let s_minus = assist_rs::assist_propagate_single(&ephem, &o_minus, &target, false).unwrap();
+        let s_plus = assist_rs::assist_propagate_single(&data, &o_plus, &target, false).unwrap();
+        let s_minus = assist_rs::assist_propagate_single(&data, &o_minus, &target, false).unwrap();
 
         for row in 0..6 {
             let fd = (s_plus[0].state[row] - s_minus[0].state[row]) / (2.0 * h);
@@ -492,7 +495,7 @@ fn test_nongrav_partials_match_finite_differences() {
 
 #[test]
 fn test_nongrav_partials_absent_without_nongrav() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -506,7 +509,7 @@ fn test_nongrav_partials_absent_without_nongrav() {
         0.001_174_22,
     ];
     let orbit = assist_rs::Orbit::new(ceres_state, 60000.0);
-    let result = assist_rs::assist_propagate_single(&ephem, &orbit, &[60030.0], true).unwrap();
+    let result = assist_rs::assist_propagate_single(&data, &orbit, &[60030.0], true).unwrap();
     assert!(result[0].stm.is_some());
     assert!(
         result[0].nongrav_partials.is_none(),
@@ -561,18 +564,17 @@ fn test_pool_matches_assist_propagate_gravity_only() {
     // the identical state (integrator is deterministic with fresh scratch
     // arrays). Tolerance is 1 ULP-ish — rebuilding sim vs reusing sim
     // should not change the IAS15 step sequence at all.
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
     let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
     let targets = [60030.0, 60090.0];
 
-    let reference = assist_rs::assist_propagate_single(&ephem, &orbit, &targets, false).unwrap();
+    let reference = assist_rs::assist_propagate_single(&data, &orbit, &targets, false).unwrap();
 
     let mut pool =
-        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::gravity_only())
-            .unwrap();
+        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::gravity_only()).unwrap();
     let pooled = pool.propagate(&orbit, &targets).unwrap();
 
     assert_eq!(reference.len(), pooled.len());
@@ -584,16 +586,16 @@ fn test_pool_matches_assist_propagate_gravity_only() {
 
 #[test]
 fn test_pool_matches_assist_propagate_with_stm() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
     let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
     let targets = [60030.0];
 
-    let reference = assist_rs::assist_propagate_single(&ephem, &orbit, &targets, true).unwrap();
+    let reference = assist_rs::assist_propagate_single(&data, &orbit, &targets, true).unwrap();
     let mut pool =
-        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::gravity_with_stm())
+        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::gravity_with_stm())
             .unwrap();
     let pooled = pool.propagate(&orbit, &targets).unwrap();
 
@@ -615,7 +617,7 @@ fn test_pool_reuse_across_different_orbits() {
     // results bitwise identical to running assist_propagate_single on each
     // independently. This is the core correctness invariant: no state
     // leaks between calls.
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -631,12 +633,12 @@ fn test_pool_reuse_across_different_orbits() {
     // Independent reference runs.
     let refs: Vec<Vec<assist_rs::PropagatedState>> = orbits
         .iter()
-        .map(|o| assist_rs::assist_propagate_single(&ephem, o, &targets, true).unwrap())
+        .map(|o| assist_rs::assist_propagate_single(&data, o, &targets, true).unwrap())
         .collect();
 
     // Pooled runs.
     let mut pool =
-        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::gravity_with_stm())
+        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::gravity_with_stm())
             .unwrap();
     let pooled: Vec<Vec<assist_rs::PropagatedState>> = orbits
         .iter()
@@ -672,7 +674,7 @@ fn test_pool_reuse_across_different_orbits() {
 
 #[test]
 fn test_pool_with_nongrav_partials() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -680,9 +682,9 @@ fn test_pool_with_nongrav_partials() {
     let orbit = assist_rs::Orbit::with_non_grav(CERES_STATE, 60000.0, ng);
     let targets = [60030.0];
 
-    let reference = assist_rs::assist_propagate_single(&ephem, &orbit, &targets, true).unwrap();
+    let reference = assist_rs::assist_propagate_single(&data, &orbit, &targets, true).unwrap();
     let mut pool =
-        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::nongrav_with_stm())
+        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::nongrav_with_stm())
             .unwrap();
     let pooled = pool.propagate(&orbit, &targets).unwrap();
 
@@ -708,14 +710,14 @@ fn test_pool_with_nongrav_partials() {
 
 #[test]
 fn test_pool_rejects_orbit_with_wrong_nongrav_flag() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
 
     // Gravity-only pool, but we hand it an orbit that carries non-grav params.
     let mut grav_pool =
-        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::gravity_with_stm())
+        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::gravity_with_stm())
             .unwrap();
     let ng = assist_rs::NonGravParams::new(1e-10, 0.0, 0.0);
     let orbit_ng = assist_rs::Orbit::with_non_grav(CERES_STATE, 60000.0, ng);
@@ -727,7 +729,7 @@ fn test_pool_rejects_orbit_with_wrong_nongrav_flag() {
 
     // And the reverse: non-grav pool, gravity-only orbit.
     let mut ng_pool =
-        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::nongrav_with_stm())
+        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::nongrav_with_stm())
             .unwrap();
     let orbit_grav = assist_rs::Orbit::new(CERES_STATE, 60000.0);
     let err = ng_pool.propagate(&orbit_grav, &[60030.0]).unwrap_err();
@@ -739,13 +741,12 @@ fn test_pool_rejects_orbit_with_wrong_nongrav_flag() {
 
 #[test]
 fn test_pool_empty_target_list() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
     let mut pool =
-        assist_rs::PropagatorPool::new(&ephem, assist_rs::PropagatorConfig::gravity_only())
-            .unwrap();
+        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::gravity_only()).unwrap();
     let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
     let result = pool.propagate(&orbit, &[]).unwrap();
     assert!(result.is_empty());
@@ -758,7 +759,7 @@ fn test_propagate_batch_matches_serial_loop() {
     // uses rayon internally; work-stealing order shouldn't change
     // per-orbit numerical results because each orbit runs its own
     // AssistSim.
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -769,11 +770,11 @@ fn test_propagate_batch_matches_serial_loop() {
     ];
     let targets = [60030.0, 60090.0, 60365.0];
 
-    let batch = assist_rs::assist_propagate(&ephem, &orbits, &targets, false, None).unwrap();
+    let batch = assist_rs::assist_propagate(&data, &orbits, &targets, false, None).unwrap();
     assert_eq!(batch.len(), orbits.len());
 
     for (i, orbit) in orbits.iter().enumerate() {
-        let serial = assist_rs::assist_propagate_single(&ephem, orbit, &targets, false).unwrap();
+        let serial = assist_rs::assist_propagate_single(&data, orbit, &targets, false).unwrap();
         assert_eq!(batch[i].len(), serial.len());
         for (j, (b, s)) in batch[i].iter().zip(serial.iter()).enumerate() {
             assert_eq!(
@@ -786,11 +787,11 @@ fn test_propagate_batch_matches_serial_loop() {
 
 #[test]
 fn test_propagate_batch_empty_orbits() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
-    let result = assist_rs::assist_propagate(&ephem, &[], &[60030.0], false, None).unwrap();
+    let result = assist_rs::assist_propagate(&data, &[], &[60030.0], false, None).unwrap();
     assert!(result.is_empty());
 }
 
@@ -800,7 +801,7 @@ fn test_propagate_batch_num_threads_modes_agree() {
     // pool) must produce bit-for-bit identical results. Rayon's scheduling
     // order shouldn't affect per-orbit numerics because each orbit runs in
     // its own fresh AssistSim.
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -811,13 +812,13 @@ fn test_propagate_batch_num_threads_modes_agree() {
     ];
     let targets = [60030.0];
 
-    let default_pool = assist_rs::assist_propagate(&ephem, &orbits, &targets, false, None).unwrap();
+    let default_pool = assist_rs::assist_propagate(&data, &orbits, &targets, false, None).unwrap();
     for (nt, label) in [
         (Some(1), "serial"),
         (Some(2), "2 threads"),
         (Some(4), "4 threads"),
     ] {
-        let got = assist_rs::assist_propagate(&ephem, &orbits, &targets, false, nt).unwrap();
+        let got = assist_rs::assist_propagate(&data, &orbits, &targets, false, nt).unwrap();
         for i in 0..orbits.len() {
             assert_eq!(
                 default_pool[i][0].state, got[i][0].state,
@@ -829,7 +830,7 @@ fn test_propagate_batch_num_threads_modes_agree() {
 
 #[test]
 fn test_generate_ephemeris_num_threads_modes_agree() {
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -839,11 +840,10 @@ fn test_generate_ephemeris_num_threads_modes_agree() {
         .collect();
 
     let default_pool =
-        assist_rs::assist_generate_ephemeris_single(&ephem, &orbit, &observers, None, None)
-            .unwrap();
+        assist_rs::assist_generate_ephemeris_single(&data, &orbit, &observers, None).unwrap();
     for (nt, label) in [(Some(1), "serial"), (Some(3), "3 threads")] {
-        let got = assist_rs::assist_generate_ephemeris_single(&ephem, &orbit, &observers, None, nt)
-            .unwrap();
+        let got =
+            assist_rs::assist_generate_ephemeris_single(&data, &orbit, &observers, nt).unwrap();
         for i in 0..observers.len() {
             assert_eq!(
                 default_pool[i].spherical, got[i].spherical,
@@ -859,7 +859,7 @@ fn test_generate_ephemeris_batch_matches_per_orbit_single() {
     // same results as calling `_single` once per orbit in a serial loop.
     // This guards against regressions in how we dispatch orbits through
     // rayon (parallel over orbits).
-    let Some(ephem) = load_ephem() else {
+    let Some(data) = load_data() else {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
@@ -876,15 +876,13 @@ fn test_generate_ephemeris_batch_matches_per_orbit_single() {
     let reference: Vec<Vec<assist_rs::EphemerisResult>> = orbits
         .iter()
         .map(|o| {
-            assist_rs::assist_generate_ephemeris_single(&ephem, o, &observers, None, Some(1))
-                .unwrap()
+            assist_rs::assist_generate_ephemeris_single(&data, o, &observers, Some(1)).unwrap()
         })
         .collect();
 
     // Batch, both serial and parallel modes should match.
     for nt in [Some(1), None, Some(2)] {
-        let got =
-            assist_rs::assist_generate_ephemeris(&ephem, &orbits, &observers, None, nt).unwrap();
+        let got = assist_rs::assist_generate_ephemeris(&data, &orbits, &observers, nt).unwrap();
         assert_eq!(got.len(), orbits.len());
         for (i, (ref_orbit, got_orbit)) in reference.iter().zip(&got).enumerate() {
             assert_eq!(got_orbit.len(), observers.len());
