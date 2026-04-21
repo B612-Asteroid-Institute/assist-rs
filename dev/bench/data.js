@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776406349770,
+  "lastUpdate": 1776796709173,
   "repoUrl": "https://github.com/B612-Asteroid-Institute/assist-rs",
   "entries": {
     "assist-rs Benchmarks": [
@@ -479,6 +479,192 @@ window.BENCHMARK_DATA = {
             "name": "duration_scaling/days/365",
             "value": 1445526,
             "range": "± 32040",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "moeyensj@gmail.com",
+            "name": "Joachim Moeyens",
+            "username": "moeyensj"
+          },
+          "committer": {
+            "email": "moeyensj@users.noreply.github.com",
+            "name": "Joachim Moeyens",
+            "username": "moeyensj"
+          },
+          "distinct": true,
+          "id": "260bcbd3610ab972e41b6ea165e98187127ee9ff",
+          "message": "Bundle ephemeris + observatory table into AssistData\n\nThe five public high-level entry points (`assist_propagate`,\n`assist_propagate_single`, `assist_get_state`,\n`assist_generate_ephemeris`, `assist_generate_ephemeris_single`) and\n`PropagatorPool::new` now take a single `&AssistData` argument instead\nof an `ephem: &Ephemeris` plus (for the ephemeris-generating paths) a\nseparate `obs_table: Option<&ObservatoryTable>`.\n\n`AssistData` is a small bundle:\n\n```rust\nlet data = AssistData::new(ephem);                    // propagation only\nlet data = AssistData::new(ephem).with_observatory(obs_table);\n```\n\nCallers load these resources once at startup anyway; plumbing them\nthrough as separate args at every call was noise. The observatory\ntable can also carry an EarthOrientation via its own builder, so the\nwhole \"data dependencies\" picture now lives in one type.\n\nNo behavioral change — all tests pass bitwise-identically. README\nexamples, benches, and validation tests updated to match.\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-04-21T11:28:06-07:00",
+          "tree_id": "0c2f83561f63570b6ff2b471de647d4c58d8a6f8",
+          "url": "https://github.com/B612-Asteroid-Institute/assist-rs/commit/260bcbd3610ab972e41b6ea165e98187127ee9ff"
+        },
+        "date": 1776796708103,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "propagate_single/rust_api/1",
+            "value": 383880,
+            "range": "± 1504",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_single/rust_api/10",
+            "value": 1013172,
+            "range": "± 59054",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_single/rust_api/100",
+            "value": 7783590,
+            "range": "± 157889",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_stm/without_stm",
+            "value": 386963,
+            "range": "± 2784",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_stm/with_stm",
+            "value": 908688,
+            "range": "± 3900",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_nongrav/gravity_only",
+            "value": 389205,
+            "range": "± 3081",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_nongrav/with_a2",
+            "value": 418264,
+            "range": "± 1449",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rust_vs_raw_c/rust_api",
+            "value": 396148,
+            "range": "± 19663",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rust_vs_raw_c/raw_c_ffi",
+            "value": 387306,
+            "range": "± 1521",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel/serial_28_orbits",
+            "value": 11051604,
+            "range": "± 238992",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel/rayon_28_orbits",
+            "value": 9399545,
+            "range": "± 38109",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/1",
+            "value": 278018,
+            "range": "± 1033",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/10",
+            "value": 346585,
+            "range": "± 5167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/30",
+            "value": 389725,
+            "range": "± 2351",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/100",
+            "value": 577485,
+            "range": "± 24170",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/365",
+            "value": 1115118,
+            "range": "± 27232",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_30d/unpooled",
+            "value": 51485458,
+            "range": "± 259173",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_30d/pooled",
+            "value": 51114829,
+            "range": "± 390445",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_30d/unpooled_with_stm",
+            "value": 117737956,
+            "range": "± 1080161",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_30d/pooled_with_stm",
+            "value": 117431866,
+            "range": "± 371229",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_365d/unpooled",
+            "value": 142167424,
+            "range": "± 335118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_365d/pooled",
+            "value": 141652966,
+            "range": "± 1002762",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_365d/unpooled_with_stm",
+            "value": 320269507,
+            "range": "± 1023897",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_365d/pooled_with_stm",
+            "value": 320173240,
+            "range": "± 1844074",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_batch/serial_loop_128",
+            "value": 51009567,
+            "range": "± 360660",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_batch/batch_api_128",
+            "value": 42962826,
+            "range": "± 179954",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "generate_ephemeris/earth_7_observers_30d",
+            "value": 2426031,
+            "range": "± 12596",
             "unit": "ns/iter"
           }
         ]
