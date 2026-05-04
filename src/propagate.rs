@@ -13,7 +13,7 @@ use crate::assist_data::AssistData;
 use crate::coordinates::{ecliptic_to_equatorial, equatorial_to_ecliptic, rotate_matrix_eq_to_ecl};
 use crate::ffi;
 use crate::orbit::{NonGravParams, Orbit};
-use crate::wrappers::{AssistSim, Ephemeris, Simulation};
+use crate::wrappers::{AssistSim, Ephemeris, IntegratorConfig, Simulation};
 use crate::{Error, Result};
 
 /// Result of propagating to a single epoch.
@@ -143,6 +143,7 @@ pub fn assist_propagate_single(
     orbit: &Orbit,
     target_epochs: &[f64],
     compute_stm: bool,
+    integrator: &IntegratorConfig,
 ) -> Result<Vec<PropagatedState>> {
     if target_epochs.is_empty() {
         return Ok(vec![]);
@@ -157,6 +158,7 @@ pub fn assist_propagate_single(
 
     let mut sim = Simulation::new()?;
     sim.set_t(t0);
+    integrator.apply(&mut sim);
     let mut asim = AssistSim::new(sim, ephem)?;
     configure_forces(&mut asim, has_nongrav);
 
@@ -215,8 +217,10 @@ pub fn assist_propagate(
     target_epochs: &[f64],
     compute_stm: bool,
     num_threads: Option<usize>,
+    integrator: &IntegratorConfig,
 ) -> Result<Vec<Vec<PropagatedState>>> {
-    let op = |orbit: &Orbit| assist_propagate_single(data, orbit, target_epochs, compute_stm);
+    let op =
+        |orbit: &Orbit| assist_propagate_single(data, orbit, target_epochs, compute_stm, integrator);
     map_with_threads(orbits, num_threads, op)
 }
 
@@ -321,9 +325,13 @@ impl PropagatorConfig {
 /// `Send + Sync`) and build one pool per worker thread.
 ///
 /// ```no_run
-/// # use assist_rs::{AssistData, Orbit, propagate::{PropagatorPool, PropagatorConfig}};
+/// # use assist_rs::{AssistData, IntegratorConfig, Orbit, propagate::{PropagatorPool, PropagatorConfig}};
 /// # fn run(data: &AssistData, orbits: &[Orbit], targets: &[f64]) -> Result<(), Box<dyn std::error::Error>> {
-/// let mut pool = PropagatorPool::new(data, PropagatorConfig::gravity_with_stm())?;
+/// let mut pool = PropagatorPool::new(
+///     data,
+///     PropagatorConfig::gravity_with_stm(),
+///     &IntegratorConfig::default(),
+/// )?;
 /// for orbit in orbits {
 ///     let result = pool.propagate(orbit, targets)?;
 ///     // ... use result[0].state, result[0].stm ...
@@ -351,11 +359,16 @@ impl<'a> PropagatorPool<'a> {
     /// the propagator.
     ///
     /// [`propagate`]: PropagatorPool::propagate
-    pub fn new(data: &'a AssistData, config: PropagatorConfig) -> Result<Self> {
+    pub fn new(
+        data: &'a AssistData,
+        config: PropagatorConfig,
+        integrator: &IntegratorConfig,
+    ) -> Result<Self> {
         let ephem = &data.ephem;
         let jd_ref = ephem.jd_ref();
         let mut sim = Simulation::new()?;
         sim.set_t(0.0);
+        integrator.apply(&mut sim);
         let mut asim = AssistSim::new(sim, ephem)?;
         configure_forces(&mut asim, config.has_nongrav);
 

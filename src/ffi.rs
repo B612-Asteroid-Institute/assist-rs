@@ -228,6 +228,11 @@ unsafe extern "C" {
     pub fn assist_rs_sim_set_gravity(r: *mut reb_simulation, g: c_int);
     pub fn assist_rs_sim_get_ias15_epsilon(r: *const reb_simulation) -> c_double;
     pub fn assist_rs_sim_set_ias15_epsilon(r: *mut reb_simulation, eps: c_double);
+    pub fn assist_rs_sim_get_ias15_min_dt(r: *const reb_simulation) -> c_double;
+    pub fn assist_rs_sim_set_ias15_min_dt(r: *mut reb_simulation, min_dt: c_double);
+    pub fn assist_rs_sim_get_ias15_adaptive_mode(r: *const reb_simulation) -> c_int;
+    pub fn assist_rs_sim_set_ias15_adaptive_mode(r: *mut reb_simulation, mode: c_int);
+    pub fn assist_rs_sim_get_ias15_iterations_max_exceeded(r: *const reb_simulation) -> u64;
 
     // assist_extras field accessors
     pub fn assist_rs_extras_get_forces(ax: *const assist_extras) -> c_int;

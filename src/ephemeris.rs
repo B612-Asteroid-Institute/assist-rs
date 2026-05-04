@@ -8,7 +8,7 @@ use crate::observatory::ObservatoryTable;
 use crate::orbit::Orbit;
 use crate::origin::Origin;
 use crate::state::resolve_origin_state;
-use crate::wrappers::{AssistSim, Ephemeris, Simulation};
+use crate::wrappers::{AssistSim, Ephemeris, IntegratorConfig, Simulation};
 use crate::{Error, Result};
 
 /// Ephemeris result for a single observer epoch.
@@ -71,6 +71,7 @@ pub fn assist_generate_ephemeris_single(
     orbit: &Orbit,
     observers: &[Observer],
     num_threads: Option<usize>,
+    integrator: &IntegratorConfig,
 ) -> Result<Vec<EphemerisResult>> {
     if observers.is_empty() {
         return Ok(vec![]);
@@ -82,7 +83,7 @@ pub fn assist_generate_ephemeris_single(
     let op = |obs: &Observer| -> Result<EphemerisResult> {
         // One simulation per observer — reused across the initial
         // propagation and every light-time iteration.
-        let mut sim = EphemerisSim::new(ephem, orbit)?;
+        let mut sim = EphemerisSim::new(ephem, orbit, integrator)?;
         compute_single_ephemeris(ephem, &mut sim, obs, c, obs_table)
     };
     crate::propagate::map_with_threads(observers, num_threads, op)
@@ -111,6 +112,7 @@ pub fn assist_generate_ephemeris(
     orbits: &[Orbit],
     observers: &[Observer],
     num_threads: Option<usize>,
+    integrator: &IntegratorConfig,
 ) -> Result<Vec<Vec<EphemerisResult>>> {
     if orbits.is_empty() {
         return Ok(vec![]);
@@ -119,7 +121,7 @@ pub fn assist_generate_ephemeris(
     let op = |orbit: &Orbit| -> Result<Vec<EphemerisResult>> {
         // `Some(1)` here means "no further parallelism inside this orbit"
         // — observers run serially so we don't nest rayon pools.
-        assist_generate_ephemeris_single(data, orbit, observers, Some(1))
+        assist_generate_ephemeris_single(data, orbit, observers, Some(1), integrator)
     };
     crate::propagate::map_with_threads(orbits, num_threads, op)
 }
@@ -250,7 +252,7 @@ struct EphemerisSim<'a> {
 }
 
 impl<'a> EphemerisSim<'a> {
-    fn new(ephem: &'a Ephemeris, orbit: &Orbit) -> Result<Self> {
+    fn new(ephem: &'a Ephemeris, orbit: &Orbit, integrator: &IntegratorConfig) -> Result<Self> {
         let jd_ref = ephem.jd_ref();
         let t0 = mjd_to_assist_time(orbit.epoch, jd_ref);
 
@@ -268,6 +270,7 @@ impl<'a> EphemerisSim<'a> {
 
         let mut sim = Simulation::new()?;
         sim.set_t(t0);
+        integrator.apply(&mut sim);
         let mut asim = AssistSim::new(sim, ephem)?;
 
         let non_grav = orbit.non_grav.as_ref();

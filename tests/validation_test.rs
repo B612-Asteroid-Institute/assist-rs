@@ -91,7 +91,7 @@ fn validate_orbit(
     };
     let target_epochs: Vec<f64> = entry.propagated.iter().map(|p| p.epoch).collect();
 
-    let results = assist_rs::assist_propagate_single(data, &orbit, &target_epochs, false)
+    let results = assist_rs::assist_propagate_single(data, &orbit, &target_epochs, false, &assist_rs::IntegratorConfig::default())
         .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", entry.object_id));
 
     assert_eq!(
@@ -297,7 +297,7 @@ fn test_rayon_parallel_propagation() {
     let results: Vec<_> = (0..n_orbits)
         .into_par_iter()
         .map(|_| {
-            assist_rs::assist_propagate_single(&data, &orbit, &targets, false)
+            assist_rs::assist_propagate_single(&data, &orbit, &targets, false, &assist_rs::IntegratorConfig::default())
                 .expect("Propagation failed")
         })
         .collect();

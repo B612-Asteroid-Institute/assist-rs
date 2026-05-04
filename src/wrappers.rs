@@ -7,6 +7,83 @@ use crate::ffi;
 use crate::{Error, Result};
 
 // ---------------------------------------------------------------------------
+// IAS15 adaptive-timestep mode (mirrors `enum reb_ias15.adaptive_mode`)
+// ---------------------------------------------------------------------------
+
+/// IAS15 timestep-adaptation rule. REBOUND default since 2024-01 is
+/// [`Self::Prs23`]; older code used [`Self::Global`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum Ias15AdaptiveMode {
+    /// Per-particle fractional error.
+    Individual = 0,
+    /// Single global fractional-error estimate (default before 2024-01).
+    Global = 1,
+    /// Pham, Rein & Spiegel (2023) criterion (default since 2024-01).
+    Prs23 = 2,
+    /// Aarseth (1985) timestep criterion.
+    Aarseth85 = 3,
+}
+
+impl Ias15AdaptiveMode {
+    fn from_raw(raw: i32) -> Self {
+        match raw {
+            0 => Self::Individual,
+            1 => Self::Global,
+            2 => Self::Prs23,
+            3 => Self::Aarseth85,
+            // Forward-compatibility: unknown values reported as the current
+            // REBOUND default. The setter only accepts the four enum values,
+            // so this branch is reachable only if REBOUND adds a new mode.
+            _ => Self::Prs23,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IntegratorConfig
+// ---------------------------------------------------------------------------
+
+/// Per-call IAS15 integrator knobs. `None` for any field leaves the REBOUND
+/// default in place.
+///
+/// Applied to a freshly-created [`Simulation`] before any particles are added,
+/// inside [`crate::assist_propagate_single`] / [`crate::assist_generate_ephemeris_single`]
+/// / [`crate::propagate::PropagatorPool::new`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IntegratorConfig {
+    /// REBOUND `r->dt` (initial timestep). The integrator picks the sign
+    /// automatically once the first step is taken.
+    pub initial_dt: Option<f64>,
+    /// REBOUND `r->ri_ias15.min_dt`. When the adaptive step would shrink
+    /// below this, it clamps. `None` (or 0) = no floor.
+    pub min_dt: Option<f64>,
+    /// REBOUND `r->ri_ias15.epsilon` (precision). REBOUND default 1e-9.
+    pub epsilon: Option<f64>,
+    /// REBOUND `r->ri_ias15.adaptive_mode`. Default `Prs23` since 2024-01.
+    pub adaptive_mode: Option<Ias15AdaptiveMode>,
+}
+
+impl IntegratorConfig {
+    /// Apply each `Some` field to `sim`. Should be called immediately after
+    /// `Simulation::new()` and before adding particles.
+    pub(crate) fn apply(&self, sim: &mut Simulation) {
+        if let Some(dt) = self.initial_dt {
+            sim.set_dt(dt);
+        }
+        if let Some(eps) = self.epsilon {
+            sim.set_ias15_epsilon(eps);
+        }
+        if let Some(min_dt) = self.min_dt {
+            sim.set_ias15_min_dt(min_dt);
+        }
+        if let Some(mode) = self.adaptive_mode {
+            sim.set_ias15_adaptive_mode(mode);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Simulation
 // ---------------------------------------------------------------------------
 
@@ -69,6 +146,44 @@ impl Simulation {
 
     pub fn set_exact_finish_time(&mut self, v: bool) {
         unsafe { ffi::assist_rs_sim_set_exact_finish_time(self.ptr, v as i32) }
+    }
+
+    /// IAS15 precision parameter (REBOUND `r->ri_ias15.epsilon`). Default 1e-9.
+    /// Larger values are looser but faster.
+    pub fn ias15_epsilon(&self) -> f64 {
+        unsafe { ffi::assist_rs_sim_get_ias15_epsilon(self.ptr) }
+    }
+    pub fn set_ias15_epsilon(&mut self, eps: f64) {
+        unsafe { ffi::assist_rs_sim_set_ias15_epsilon(self.ptr, eps) }
+    }
+
+    /// IAS15 minimum timestep floor (REBOUND `r->ri_ias15.min_dt`). When the
+    /// adaptive step would shrink below this, it clamps instead of grinding.
+    /// Default 0 = no floor.
+    pub fn ias15_min_dt(&self) -> f64 {
+        unsafe { ffi::assist_rs_sim_get_ias15_min_dt(self.ptr) }
+    }
+    pub fn set_ias15_min_dt(&mut self, min_dt: f64) {
+        unsafe { ffi::assist_rs_sim_set_ias15_min_dt(self.ptr, min_dt) }
+    }
+
+    /// IAS15 adaptive-timestep selector. Default `Prs23` (REBOUND default
+    /// since 2024-01).
+    pub fn ias15_adaptive_mode(&self) -> Ias15AdaptiveMode {
+        let raw = unsafe { ffi::assist_rs_sim_get_ias15_adaptive_mode(self.ptr) };
+        Ias15AdaptiveMode::from_raw(raw)
+    }
+    pub fn set_ias15_adaptive_mode(&mut self, mode: Ias15AdaptiveMode) {
+        unsafe { ffi::assist_rs_sim_set_ias15_adaptive_mode(self.ptr, mode as i32) }
+    }
+
+    /// Diagnostic counter: how many IAS15 steps hit the predictor-corrector
+    /// iteration cap without converging. Monotone-increasing across the
+    /// simulation lifetime; nonzero indicates the integrator was working
+    /// at the edge of convergence (typically a hint to tighten `epsilon` or
+    /// raise `min_dt`).
+    pub fn ias15_iterations_max_exceeded(&self) -> u64 {
+        unsafe { ffi::assist_rs_sim_get_ias15_iterations_max_exceeded(self.ptr) }
     }
 
     /// Add a particle to the simulation.

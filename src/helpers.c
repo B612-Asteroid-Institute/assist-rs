@@ -134,6 +134,32 @@ void assist_rs_sim_set_ias15_epsilon(struct reb_simulation* r, double eps) {
     r->ri_ias15.epsilon = eps;
 }
 
+// IAS15 minimum timestep floor. When the adaptive step would shrink below
+// this value, the integrator clamps it instead of grinding toward zero.
+// Default 0 = no floor.
+double assist_rs_sim_get_ias15_min_dt(const struct reb_simulation* r) {
+    return r->ri_ias15.min_dt;
+}
+void assist_rs_sim_set_ias15_min_dt(struct reb_simulation* r, double min_dt) {
+    r->ri_ias15.min_dt = min_dt;
+}
+
+// IAS15 adaptive-mode selector: 0=Individual, 1=Global, 2=PRS23 (REBOUND
+// default since 2024-01), 3=Aarseth85.
+int assist_rs_sim_get_ias15_adaptive_mode(const struct reb_simulation* r) {
+    return (int)r->ri_ias15.adaptive_mode;
+}
+void assist_rs_sim_set_ias15_adaptive_mode(struct reb_simulation* r, int mode) {
+    r->ri_ias15.adaptive_mode = mode;
+}
+
+// Diagnostic counter: number of IAS15 steps where the predictor-corrector
+// loop hit the iteration cap without converging. Monotone-increasing across
+// the simulation lifetime.
+unsigned long long assist_rs_sim_get_ias15_iterations_max_exceeded(const struct reb_simulation* r) {
+    return r->ri_ias15.iterations_max_exceeded;
+}
+
 // --- assist_extras field accessors ---
 
 int assist_rs_extras_get_forces(const struct assist_extras* ax) { return ax->forces; }

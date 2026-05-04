@@ -277,7 +277,7 @@ fn test_propagation_against_horizons() {
                 .collect();
 
             let propagated =
-                assist_rs::assist_propagate_single(&data, &orbit, &target_epochs, false)
+                assist_rs::assist_propagate_single(&data, &orbit, &target_epochs, false, &assist_rs::IntegratorConfig::default())
                     .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", entry.object_id));
 
             let mut rows: Vec<(f64, f64, f64)> = Vec::new(); // (dt, pos_err_m, vel_err_m_s)
@@ -443,7 +443,7 @@ fn test_ephemeris_against_horizons_v2() {
                 .collect();
 
             let predicted =
-                assist_rs::assist_generate_ephemeris_single(&data, &orbit, &observers, Some(1))
+                assist_rs::assist_generate_ephemeris_single(&data, &orbit, &observers, Some(1), &assist_rs::IntegratorConfig::default())
                     .unwrap_or_else(|e| {
                         panic!(
                             "Ephemeris failed for {} @ {}: {e}",

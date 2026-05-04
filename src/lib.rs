@@ -15,7 +15,7 @@
 pub mod ffi;
 mod wrappers;
 
-pub use wrappers::{AssistSim, Ephemeris, Simulation};
+pub use wrappers::{AssistSim, Ephemeris, Ias15AdaptiveMode, IntegratorConfig, Simulation};
 
 mod assist_data;
 pub mod coordinates;
