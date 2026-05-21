@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779388474498,
+  "lastUpdate": 1779389184715,
   "repoUrl": "https://github.com/B612-Asteroid-Institute/assist-rs",
   "entries": {
     "assist-rs Benchmarks": [
@@ -851,6 +851,192 @@ window.BENCHMARK_DATA = {
             "name": "generate_ephemeris/earth_7_observers_30d",
             "value": 494264,
             "range": "± 14359",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "moeyensj@users.noreply.github.com",
+            "name": "Joachim Moeyens",
+            "username": "moeyensj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "456dc879e6308dd339619077e32404a6e1a83679",
+          "message": "Fix rustdoc unresolved-link warnings (#10)\n\nTwo intra-doc references that fail under -D warnings (and would fail\ndocs.rs once strict-lints is enabled):\n\n- src/coordinates.rs:52 — `[x,y,z,vx,vy,vz]` looked like a markdown\n  link target to rustdoc. Use backticks for the code span.\n- src/earth_orientation.rs:210 — `[\\`rotation_itrf_to_j2000\\`]` doesn't\n  resolve in the impl block context. Qualify as `Self::rotation_...`.\n\nBoth render identically; only the parser was unhappy.\n\nCo-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-05-21T11:38:16-07:00",
+          "tree_id": "096ba82520f1e98320a3d992e05641049e671a3b",
+          "url": "https://github.com/B612-Asteroid-Institute/assist-rs/commit/456dc879e6308dd339619077e32404a6e1a83679"
+        },
+        "date": 1779389184376,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "propagate_single/rust_api/1",
+            "value": 450178,
+            "range": "± 2918",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_single/rust_api/10",
+            "value": 1190239,
+            "range": "± 36266",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_single/rust_api/100",
+            "value": 9117370,
+            "range": "± 29997",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_stm/without_stm",
+            "value": 452029,
+            "range": "± 1178",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_stm/with_stm",
+            "value": 1005942,
+            "range": "± 7683",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_nongrav/gravity_only",
+            "value": 452898,
+            "range": "± 4167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_nongrav/with_a2",
+            "value": 486419,
+            "range": "± 1226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rust_vs_raw_c/rust_api",
+            "value": 452489,
+            "range": "± 11788",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rust_vs_raw_c/raw_c_ffi",
+            "value": 452070,
+            "range": "± 560",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel/serial_28_orbits",
+            "value": 12849488,
+            "range": "± 49676",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel/rayon_28_orbits",
+            "value": 5077302,
+            "range": "± 33693",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/1",
+            "value": 319103,
+            "range": "± 1774",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/10",
+            "value": 402980,
+            "range": "± 101474",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/30",
+            "value": 453145,
+            "range": "± 1371",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/100",
+            "value": 671864,
+            "range": "± 1258",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/365",
+            "value": 1297715,
+            "range": "± 13780",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_30d/unpooled",
+            "value": 59383371,
+            "range": "± 642217",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_30d/pooled",
+            "value": 59069795,
+            "range": "± 488545",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_30d/unpooled_with_stm",
+            "value": 129740019,
+            "range": "± 108862",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_30d/pooled_with_stm",
+            "value": 129262517,
+            "range": "± 222908",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_365d/unpooled",
+            "value": 163525462,
+            "range": "± 1689459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_365d/pooled",
+            "value": 163121522,
+            "range": "± 161792",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_365d/unpooled_with_stm",
+            "value": 353044802,
+            "range": "± 17865437",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_365d/pooled_with_stm",
+            "value": 352366318,
+            "range": "± 690174",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_batch/serial_loop_128",
+            "value": 59203076,
+            "range": "± 159717",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_batch/batch_api_128",
+            "value": 23200581,
+            "range": "± 113677",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "generate_ephemeris/earth_7_observers_30d",
+            "value": 496035,
+            "range": "± 712",
             "unit": "ns/iter"
           }
         ]
