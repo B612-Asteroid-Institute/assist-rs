@@ -10,11 +10,14 @@
 //!   variational-dimension configuration.
 
 use crate::assist_data::AssistData;
-use crate::coordinates::{ecliptic_to_equatorial, equatorial_to_ecliptic, rotate_matrix_eq_to_ecl};
-use crate::ffi;
+use crate::coordinates::{
+    bary_to_helio, ecliptic_to_equatorial, equatorial_to_ecliptic, helio_to_bary,
+    rotate_matrix_eq_to_ecl,
+};
 use crate::orbit::{NonGravParams, Orbit};
-use crate::wrappers::{AssistSim, Ephemeris, IntegratorConfig, Simulation};
 use crate::{Error, Result};
+use libassist_sys::ffi;
+use libassist_sys::{AssistSim, Ephemeris, IntegratorConfig, Simulation};
 
 /// Result of propagating to a single epoch.
 #[derive(Debug, Clone)]
@@ -150,8 +153,7 @@ pub fn assist_propagate_single(
     }
 
     let ephem = &data.ephem;
-    let jd_ref = ephem.jd_ref();
-    let t0 = mjd_to_assist_time(orbit.epoch, jd_ref);
+    let t0 = ephem.mjd_to_assist_time(orbit.epoch);
 
     let has_nongrav = orbit.non_grav.is_some();
     let want_nongrav_partials = compute_stm && has_nongrav;
@@ -219,8 +221,9 @@ pub fn assist_propagate(
     num_threads: Option<usize>,
     integrator: &IntegratorConfig,
 ) -> Result<Vec<Vec<PropagatedState>>> {
-    let op =
-        |orbit: &Orbit| assist_propagate_single(data, orbit, target_epochs, compute_stm, integrator);
+    let op = |orbit: &Orbit| {
+        assist_propagate_single(data, orbit, target_epochs, compute_stm, integrator)
+    };
     map_with_threads(orbits, num_threads, op)
 }
 
@@ -343,7 +346,6 @@ impl PropagatorConfig {
 pub struct PropagatorPool<'a> {
     asim: AssistSim,
     ephem: &'a Ephemeris,
-    jd_ref: f64,
     config: PropagatorConfig,
     /// Cached variational count (0, 6, or 9) — derived from config.
     n_var: usize,
@@ -365,7 +367,6 @@ impl<'a> PropagatorPool<'a> {
         integrator: &IntegratorConfig,
     ) -> Result<Self> {
         let ephem = &data.ephem;
-        let jd_ref = ephem.jd_ref();
         let mut sim = Simulation::new()?;
         sim.set_t(0.0);
         integrator.apply(&mut sim);
@@ -390,7 +391,6 @@ impl<'a> PropagatorPool<'a> {
         Ok(Self {
             asim,
             ephem,
-            jd_ref,
             config,
             n_var,
         })
@@ -432,7 +432,7 @@ impl<'a> PropagatorPool<'a> {
         }
 
         let want_nongrav_partials = self.config.compute_stm && self.config.has_nongrav;
-        let t0 = mjd_to_assist_time(orbit.epoch, self.jd_ref);
+        let t0 = self.ephem.mjd_to_assist_time(orbit.epoch);
 
         // 1) Clear IAS15 scratch arrays so no compensated-sum or predictor
         //    state leaks from the previous orbit. In-place memset, no
@@ -454,7 +454,7 @@ impl<'a> PropagatorPool<'a> {
         // 4) Non-grav scalar params + in-place A1/A2/A3 update (no realloc).
         if let Some(ng) = orbit.non_grav.as_ref() {
             apply_nongrav_scalars(&mut self.asim, ng);
-            self.asim.update_nongrav_coeffs(ng.a1, ng.a2, ng.a3);
+            self.asim.update_nongrav_coeffs(ng.a1, ng.a2, ng.a3)?;
         }
 
         run_integration(
@@ -471,20 +471,12 @@ impl<'a> PropagatorPool<'a> {
 
 /// Heliocentric ecliptic J2000 → barycentric equatorial ICRF at ASSIST time `t`.
 fn ecl_orbit_to_bary_eq(ecl_state: &[f64; 6], ephem: &Ephemeris, t: f64) -> Result<[f64; 6]> {
-    let eq_state = ecliptic_to_equatorial(ecl_state);
-    let sun = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t)?;
-    Ok([
-        eq_state[0] + sun.x,
-        eq_state[1] + sun.y,
-        eq_state[2] + sun.z,
-        eq_state[3] + sun.vx,
-        eq_state[4] + sun.vy,
-        eq_state[5] + sun.vz,
-    ])
+    let sun = ephem.get_body_state_array(ffi::ASSIST_BODY_SUN, t)?;
+    Ok(helio_to_bary(&ecliptic_to_equatorial(ecl_state), &sun))
 }
 
 /// Set ASSIST force flags (default + optional non-grav).
-fn configure_forces(asim: &mut AssistSim, has_nongrav: bool) {
+pub(crate) fn configure_forces(asim: &mut AssistSim, has_nongrav: bool) {
     let mut forces = ffi::ASSIST_FORCES_DEFAULT;
     if has_nongrav {
         forces |= ffi::ASSIST_FORCE_NON_GRAVITATIONAL;
@@ -502,7 +494,7 @@ fn variational_count(compute_stm: bool, has_nongrav: bool) -> usize {
 }
 
 /// Apply the non-grav g(r) scalar parameters (α, nk, nm, nn, r0).
-fn apply_nongrav_scalars(asim: &mut AssistSim, ng: &NonGravParams) {
+pub(crate) fn apply_nongrav_scalars(asim: &mut AssistSim, ng: &NonGravParams) {
     if let Some(v) = ng.alpha {
         asim.set_alpha(v);
     }
@@ -524,7 +516,11 @@ fn apply_nongrav_scalars(asim: &mut AssistSim, ng: &NonGravParams) {
 /// to an empty simulation. Variational particles 0..5 get unit state
 /// perturbations; 6..8 (when present) get zero state (the correct IC for
 /// parameter sensitivities).
-fn add_particles_and_variationals(asim: &mut AssistSim, bary_state: &[f64; 6], n_var: usize) {
+pub(crate) fn add_particles_and_variationals(
+    asim: &mut AssistSim,
+    bary_state: &[f64; 6],
+    n_var: usize,
+) {
     asim.sim_mut().add_test_particle(
         bary_state[0],
         bary_state[1],
@@ -544,7 +540,7 @@ fn add_particles_and_variationals(asim: &mut AssistSim, bary_state: &[f64; 6], n
 /// `PropagatorPool::propagate` between orbits.
 fn overwrite_particles(asim: &mut AssistSim, bary_state: &[f64; 6], n_var: usize) {
     unsafe {
-        let ptr = ffi::assist_rs_sim_get_particles(asim.sim().ptr);
+        let ptr = librebound_sys::ffi::assist_rs_sim_get_particles(asim.sim().as_ptr());
         let p = &mut *ptr;
         p.x = bary_state[0];
         p.y = bary_state[1];
@@ -569,7 +565,7 @@ fn init_variational_state_perturbations(asim: &mut AssistSim, n_var: usize) {
         return;
     }
     unsafe {
-        let ptr = ffi::assist_rs_sim_get_particles(asim.sim().ptr);
+        let ptr = librebound_sys::ffi::assist_rs_sim_get_particles(asim.sim().as_ptr());
         for i in 0..n_var {
             *ptr.add(1 + i) = ffi::reb_particle::default();
         }
@@ -595,7 +591,11 @@ fn init_variational_state_perturbations(asim: &mut AssistSim, n_var: usize) {
 ///
 /// Layout: `[A1, A2, A3 | 0…0 for 6 state variationals | 100, 010, 001 for 3 param variationals]`
 /// where the last block only exists when `want_nongrav_partials` is true.
-fn install_particle_params(asim: &mut AssistSim, ng: &NonGravParams, want_nongrav_partials: bool) {
+pub(crate) fn install_particle_params(
+    asim: &mut AssistSim,
+    ng: &NonGravParams,
+    want_nongrav_partials: bool,
+) {
     let n_total = asim.sim().n_particles();
     let mut params = vec![0.0f64; 3 * n_total];
     params[0] = ng.a1;
@@ -619,11 +619,10 @@ fn run_integration(
     compute_stm: bool,
     want_nongrav_partials: bool,
 ) -> Result<Vec<PropagatedState>> {
-    let jd_ref = ephem.jd_ref();
     let mut results = Vec::with_capacity(target_epochs.len());
 
     for &target_mjd in target_epochs {
-        let t_target = mjd_to_assist_time(target_mjd, jd_ref);
+        let t_target = ephem.mjd_to_assist_time(target_mjd);
         asim.integrate(t_target)?;
 
         let particles = asim.sim().particles();
@@ -633,17 +632,9 @@ fn run_integration(
         let p = &particles[0];
         let bary_eq = [p.x, p.y, p.z, p.vx, p.vy, p.vz];
 
-        // Convert barycentric equatorial → heliocentric ecliptic
-        let sun_t = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t_target)?;
-        let helio_eq = [
-            bary_eq[0] - sun_t.x,
-            bary_eq[1] - sun_t.y,
-            bary_eq[2] - sun_t.z,
-            bary_eq[3] - sun_t.vx,
-            bary_eq[4] - sun_t.vy,
-            bary_eq[5] - sun_t.vz,
-        ];
-        let helio_ecl = equatorial_to_ecliptic(&helio_eq);
+        // Convert barycentric equatorial → heliocentric ecliptic.
+        let sun_t = ephem.get_body_state_array(ffi::ASSIST_BODY_SUN, t_target)?;
+        let helio_ecl = equatorial_to_ecliptic(&bary_to_helio(&bary_eq, &sun_t));
 
         let (stm, nongrav_partials) = if compute_stm {
             extract_stm_and_partials(particles, want_nongrav_partials)
@@ -710,13 +701,6 @@ fn extract_stm_and_partials(
         None
     };
     (stm, nongrav)
-}
-
-/// Convert MJD TDB to ASSIST time (days from jd_ref).
-///
-/// ASSIST time = JD - jd_ref, where JD = MJD + 2400000.5.
-fn mjd_to_assist_time(mjd_tdb: f64, jd_ref: f64) -> f64 {
-    (mjd_tdb + 2_400_000.5) - jd_ref
 }
 
 #[cfg(test)]

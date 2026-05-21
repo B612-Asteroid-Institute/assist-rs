@@ -1,8 +1,28 @@
-# assist-rs
+# assist-rs: Domain layer for ASSIST + REBOUND solar-system propagation
+#### A Rust crate by the Asteroid Institute, a program of the B612 Foundation
 
-Rust FFI bindings and safe wrappers for [ASSIST](https://github.com/matthewholman/assist) + [REBOUND](https://github.com/hannorein/rebound), providing ephemeris-quality integration of test particles in the solar system.
+[![REBOUND 4.6.0](https://img.shields.io/badge/REBOUND-4.6.0-orange?style=flat-square)](https://github.com/hannorein/rebound)
+[![ASSIST 1.2.0](https://img.shields.io/badge/ASSIST-1.2.0-orange?style=flat-square)](https://github.com/matthewholman/assist)<br/>
+[![CI](https://github.com/B612-Asteroid-Institute/assist-rs/actions/workflows/rust.yml/badge.svg?style=flat-square)](https://github.com/B612-Asteroid-Institute/assist-rs/actions/workflows/rust.yml)
+[![crates.io](https://img.shields.io/crates/v/assist-rs.svg?style=flat-square)](https://crates.io/crates/assist-rs)
+[![docs.rs](https://img.shields.io/docsrs/assist-rs?style=flat-square)](https://docs.rs/assist-rs)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg?style=flat-square)](LICENSE)<br/>
+[![GitHub](https://img.shields.io/badge/GitHub-B612--Asteroid--Institute-181717?style=flat-square&logo=github&logoColor=white)](https://github.com/B612-Asteroid-Institute)
+[![Website](https://img.shields.io/badge/Website-asteroid.institute-1f6feb?style=flat-square&logo=googlechrome&logoColor=white)](https://asteroid.institute/)
+
+High-level Rust API for ephemeris-quality integration of test particles in the solar system. Wraps [ASSIST](https://github.com/matthewholman/assist) + [REBOUND](https://github.com/hannorein/rebound) and adds orbits, observatories, light-time iteration, STM propagation, and data-file management.
 
 ASSIST uses REBOUND's IAS15 integrator (15th-order, adaptive step-size) to propagate test particle trajectories under the gravitational influence of the Sun, planets, Moon, and 16 massive asteroids, with positions sourced from JPL DE440/DE441 ephemerides.
+
+## Crate hierarchy
+
+```text
+assist-rs            ← domain types: Orbit, Origin, Observer, DataManager (this crate)
+  └── libassist-sys  ← raw ASSIST FFI + AssistSim/Ephemeris RAII
+        └── librebound-sys  ← raw REBOUND FFI + Simulation RAII
+```
+
+Most users want **`assist-rs`**. The `-sys` crates are useful only if you need raw FFI access or want to call REBOUND directly without ASSIST forces.
 
 ## API
 
@@ -37,10 +57,12 @@ Origin::SaturnBarycenter
 Origin::Observatory("I11".into())  // MPC observatory code
 Origin::SolarSystemBarycenter      // SSB
 
-// Parse from string (case-insensitive)
-Origin::parse("earth")       // → Origin::Earth
-Origin::parse("jupiter")     // → Origin::JupiterBarycenter
-Origin::parse("W84")         // → Origin::Observatory("W84")
+// Parse from string. Body names are case-insensitive; MPC codes must be
+// exactly 3 alphanumeric characters. Returns Err on typos.
+Origin::parse("earth")?      // → Origin::Earth
+Origin::parse("jupiter")?    // → Origin::JupiterBarycenter
+Origin::parse("W84")?        // → Origin::Observatory("W84")
+Origin::parse("earty").is_err()   // typo → error, not silent observatory
 ```
 
 ### `AssistData`
@@ -176,9 +198,9 @@ let obs_table = ObservatoryTable::from_json(
 )?;
 ```
 
-### Earth orientation (optional)
+### Earth orientation
 
-For sub-mas accuracy of ground-based observatory positions, attach a binary PCK kernel (NAIF `earth_*.bpc` files) for the ITRF93 → ICRF rotation. Without this, the code falls back to a simplified IAU GMST approximation (~50 mas).
+Ground-based observatory positions are rotated from ITRF93 into ICRF via a binary PCK kernel (NAIF `earth_*.bpc` files). Looking up a ground observatory without an attached kernel returns `Error::MissingEarthOrientation` — no silent fallback to a low-precision approximation.
 
 ```rust
 use assist_rs::earth_orientation::EarthOrientation;
@@ -244,17 +266,19 @@ The Horizons validation suite (`tests/horizons_v2_test.rs`) additionally needs t
 
 ## Versioning
 
-The crate version tracks the vendored ASSIST version: **assist-rs 1.2.x wraps ASSIST 1.2.0**. The patch version (the `x`) is reserved for Rust-side fixes that don't change the underlying C library. A new ASSIST release (e.g., 1.3.0) would become assist-rs 1.3.0.
+`assist-rs` follows **standard Rust semver** — version reflects the Rust API, not the upstream C library. Pre-1.0 (`0.x.y`) means breaking changes can happen on any minor bump; the crate will move to 1.0.0 once the domain-layer API is settled.
 
-The corresponding REBOUND version is pinned by the git submodule and recorded in `[package.metadata.vendored]` in Cargo.toml.
+This differs from the wrapped `-sys` crates ([`librebound-sys`](https://crates.io/crates/librebound-sys), [`libassist-sys`](https://crates.io/crates/libassist-sys)), whose `major.minor` mirrors the upstream C library version. The two schemes are independent: an ASSIST 1.3 release bumps `libassist-sys` to 1.3.0, but `assist-rs` only bumps if its Rust API also changes.
 
-| assist-rs | ASSIST | REBOUND | License |
-|-----------|--------|---------|---------|
-| 1.2.x | [1.2.0](https://github.com/matthewholman/assist/releases/tag/v1.2.0) | [4.6.0](https://github.com/hannorein/rebound/releases/tag/4.6.0) | GPL-3.0 |
+| assist-rs | ASSIST | REBOUND | libassist-sys | librebound-sys |
+|---|---|---|---|---|
+| 0.1.x | [1.2.0](https://github.com/matthewholman/assist/releases/tag/v1.2.0) | [4.6.0](https://github.com/hannorein/rebound/releases/tag/4.6.0) | 1.2.x | 4.6.x |
+
+Pinned upstream versions are also recorded in `[package.metadata.vendored]` in each crate's Cargo.toml.
 
 ## License
 
-GPL-3.0 -- required by the vendored REBOUND and ASSIST libraries.
+GPL-3.0 — required by the vendored ASSIST and REBOUND sources (pulled in transitively via [`libassist-sys`](https://github.com/B612-Asteroid-Institute/libassist-sys) and [`librebound-sys`](https://github.com/B612-Asteroid-Institute/librebound-sys), each of which preserves its upstream LICENSE). See [LICENSE](LICENSE).
 
 ## References
 
@@ -264,4 +288,11 @@ GPL-3.0 -- required by the vendored REBOUND and ASSIST libraries.
 
 ## Acknowledgments
 
-Developed by the [Asteroid Institute](https://asteroid.institute/), a program of the [B612 Foundation](https://b612foundation.org/).
+This crate is a Rust wrapper plus a domain-layer API. All credit for the underlying physics and integrator implementations belongs to the upstream projects:
+
+- **ASSIST** — Matthew Holman and contributors. Source: <https://github.com/matthewholman/assist>. Vendored via the companion [`libassist-sys`](https://github.com/B612-Asteroid-Institute/libassist-sys) crate ([crates.io](https://crates.io/crates/libassist-sys)), which preserves the upstream LICENSE.
+- **REBOUND** — Hanno Rein and contributors. Source: <https://github.com/hannorein/rebound>. Vendored via the companion [`librebound-sys`](https://github.com/B612-Asteroid-Institute/librebound-sys) crate ([crates.io](https://crates.io/crates/librebound-sys)), which preserves the upstream LICENSE.
+
+If you use this crate in published work, please cite the ASSIST and REBOUND papers listed in [References](#references) — not this crate.
+
+The Rust wrapper and domain-layer API are developed by the [Asteroid Institute](https://asteroid.institute/), a program of the [B612 Foundation](https://b612foundation.org/).

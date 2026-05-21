@@ -1,6 +1,8 @@
 //! Origin types for state queries and observer positions.
 
-use crate::ffi;
+use libassist_sys::ffi;
+
+use crate::{Error, Result};
 
 /// An origin point in the solar system: a named body, barycenter, or MPC observatory.
 ///
@@ -37,27 +39,26 @@ pub enum Origin {
 }
 
 impl Origin {
-    /// Parse a string into an `Origin`. Named bodies are matched case-insensitively;
-    /// anything else is treated as an MPC observatory code.
+    /// Parse a string into an `Origin`.
     ///
-    /// Accepts both short names ("earth", "jupiter") and explicit barycenter names
-    /// ("jupiter_barycenter", "ssb").
-    pub fn parse(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "ssb" | "solar_system_barycenter" => Origin::SolarSystemBarycenter,
-            "sun" => Origin::Sun,
-            "mercury" | "mercury_barycenter" => Origin::MercuryBarycenter,
-            "venus" | "venus_barycenter" => Origin::VenusBarycenter,
-            "earth" => Origin::Earth,
-            "moon" => Origin::Moon,
-            "mars" | "mars_barycenter" => Origin::MarsBarycenter,
-            "jupiter" | "jupiter_barycenter" => Origin::JupiterBarycenter,
-            "saturn" | "saturn_barycenter" => Origin::SaturnBarycenter,
-            "uranus" | "uranus_barycenter" => Origin::UranusBarycenter,
-            "neptune" | "neptune_barycenter" => Origin::NeptuneBarycenter,
-            "pluto" | "pluto_barycenter" => Origin::PlutoBarycenter,
-            _ => Origin::Observatory(s.to_string()),
+    /// Recognises named bodies (case-insensitive) and 3-character alphanumeric
+    /// MPC observatory codes (case-preserving). Anything else is rejected —
+    /// previously a typo'd body name silently became `Origin::Observatory(s)`
+    /// and failed later at lookup time with a misleading "unknown MPC code"
+    /// error.
+    ///
+    /// Body names accept short and explicit forms ("earth", "jupiter",
+    /// "jupiter_barycenter", "ssb").
+    pub fn parse(s: &str) -> Result<Self> {
+        if let Some(o) = parse_body_name(s) {
+            return Ok(o);
         }
+        if is_mpc_code(s) {
+            return Ok(Origin::Observatory(s.to_string()));
+        }
+        Err(Error::InvalidBody(format!(
+            "{s:?} is neither a known body name nor a valid 3-character MPC code"
+        )))
     }
 
     /// Return the ASSIST body ID if this is a named body (not SSB or observatory).
@@ -84,5 +85,73 @@ impl Origin {
             Origin::Observatory(code) => Some(code),
             _ => None,
         }
+    }
+}
+
+fn parse_body_name(s: &str) -> Option<Origin> {
+    Some(match s.to_lowercase().as_str() {
+        "ssb" | "solar_system_barycenter" => Origin::SolarSystemBarycenter,
+        "sun" => Origin::Sun,
+        "mercury" | "mercury_barycenter" => Origin::MercuryBarycenter,
+        "venus" | "venus_barycenter" => Origin::VenusBarycenter,
+        "earth" => Origin::Earth,
+        "moon" => Origin::Moon,
+        "mars" | "mars_barycenter" => Origin::MarsBarycenter,
+        "jupiter" | "jupiter_barycenter" => Origin::JupiterBarycenter,
+        "saturn" | "saturn_barycenter" => Origin::SaturnBarycenter,
+        "uranus" | "uranus_barycenter" => Origin::UranusBarycenter,
+        "neptune" | "neptune_barycenter" => Origin::NeptuneBarycenter,
+        "pluto" | "pluto_barycenter" => Origin::PlutoBarycenter,
+        _ => return None,
+    })
+}
+
+/// MPC observatory codes are exactly three ASCII alphanumeric characters
+/// (every entry in `obscodes_extended.json` follows this shape).
+fn is_mpc_code(s: &str) -> bool {
+    s.len() == 3 && s.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_known_body_names() {
+        assert!(matches!(Origin::parse("earth").unwrap(), Origin::Earth));
+        assert!(matches!(
+            Origin::parse("JUPITER_BARYCENTER").unwrap(),
+            Origin::JupiterBarycenter
+        ));
+        assert!(matches!(
+            Origin::parse("ssb").unwrap(),
+            Origin::SolarSystemBarycenter
+        ));
+    }
+
+    #[test]
+    fn parses_three_char_mpc_codes() {
+        match Origin::parse("I11").unwrap() {
+            Origin::Observatory(c) => assert_eq!(c, "I11"),
+            other => panic!("expected observatory, got {other:?}"),
+        }
+        // Numeric and mixed are fine.
+        assert!(matches!(Origin::parse("500"), Ok(Origin::Observatory(_))));
+        assert!(matches!(Origin::parse("W84"), Ok(Origin::Observatory(_))));
+    }
+
+    #[test]
+    fn rejects_typoed_body_names() {
+        let err = Origin::parse("earty").unwrap_err();
+        assert!(err.to_string().contains("neither a known body name"));
+    }
+
+    #[test]
+    fn rejects_non_three_char_strings() {
+        assert!(Origin::parse("ABCD").is_err());
+        assert!(Origin::parse("AB").is_err());
+        assert!(Origin::parse("").is_err());
+        // Non-alphanumeric.
+        assert!(Origin::parse("I-1").is_err());
     }
 }

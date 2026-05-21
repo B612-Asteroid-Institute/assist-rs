@@ -237,10 +237,13 @@ impl DataManager {
     /// - If the file is missing → download.
     /// - Else if a sidecar exists, compare the local file's MD5 against the
     ///   stored MD5. Mismatch implies local corruption or tampering →
-    ///   re-download.
+    ///   re-download. An error computing the MD5 (e.g. unreadable file) is
+    ///   propagated, not swallowed.
     /// - Else if the file is non-static (e.g. `obscodes_extended.json`), HEAD
     ///   the remote and re-download if `Content-Length` or `Last-Modified`
-    ///   differs from the sidecar.
+    ///   differs from the sidecar. Network failures here are propagated —
+    ///   callers that need offline-tolerant behavior should use
+    ///   [`Self::offline`] instead.
     /// - Else (static file, MD5 matches, or no sidecar to check against) →
     ///   keep the cached copy.
     pub fn ensure_ready(&self) -> Result<AssistDataPaths, DataError> {
@@ -264,35 +267,25 @@ impl DataManager {
 
             // Integrity check: the local file's MD5 must match what we
             // recorded when we downloaded it. Catches on-disk corruption and
-            // deliberate replacement.
-            match local_md5_matches(&path, &meta.md5) {
-                Ok(true) => {}
-                Ok(false) => {
-                    eprintln!("Re-downloading {} (local MD5 mismatch)...", entry.filename);
-                    download(entry, &path, &meta_path)?;
-                    continue;
-                }
-                Err(e) => {
-                    eprintln!("Warning: MD5 check failed for {}: {e}", entry.filename);
-                }
+            // deliberate replacement. An error here means we can't even
+            // read the local file — propagate rather than silently trust
+            // an unverifiable cache entry.
+            if !local_md5_matches(&path, &meta.md5)? {
+                eprintln!("Re-downloading {} (local MD5 mismatch)...", entry.filename);
+                download(entry, &path, &meta_path)?;
+                continue;
             }
 
             if entry.is_static {
                 continue;
             }
 
-            match is_stale(entry.url, &meta) {
-                Ok(true) => {
-                    eprintln!("Updating {} (remote changed)...", entry.filename);
-                    download(entry, &path, &meta_path)?;
-                }
-                Ok(false) => {}
-                Err(e) => {
-                    eprintln!(
-                        "Warning: staleness check failed for {}: {e}",
-                        entry.filename
-                    );
-                }
+            // Staleness check: failure here is most often a network outage.
+            // Surface it rather than silently serving a possibly-stale cache;
+            // offline callers should use `offline()` instead of `ensure_ready`.
+            if is_stale(entry.url, &meta)? {
+                eprintln!("Updating {} (remote changed)...", entry.filename);
+                download(entry, &path, &meta_path)?;
             }
         }
 
@@ -482,6 +475,57 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let nonexistent = dir.path().join("not_there.bin");
         assert!(local_md5_matches(&nonexistent, "").unwrap());
+    }
+
+    /// When a sidecar declares a real MD5 but the underlying file is
+    /// missing/unreadable, the helper must propagate the I/O error rather
+    /// than silently returning `false` (which would trigger a re-download)
+    /// or `true` (which would mask the corruption). `ensure_ready` relies on
+    /// this to surface unverifiable cache entries to the caller instead of
+    /// the previous `eprintln!` + continue behaviour.
+    #[test]
+    fn local_md5_matches_propagates_io_error_on_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("absent.bin");
+        let err = local_md5_matches(&missing, "deadbeef").unwrap_err();
+        assert!(
+            matches!(err, DataError::Io(_)),
+            "expected DataError::Io, got {err:?}"
+        );
+    }
+
+    /// `read_meta` on a missing sidecar must error — this is the upstream
+    /// of `ensure_ready`'s integrity check. (`ensure_ready` itself treats a
+    /// missing sidecar separately: it's an explicit `let Ok(meta) = ... else
+    /// continue` branch, not an error path.)
+    #[test]
+    fn read_meta_errors_on_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("kernel.meta.json");
+        let err = read_meta(&missing).unwrap_err();
+        assert!(matches!(err, DataError::Io(_)));
+    }
+
+    /// Network failures during the staleness HEAD must propagate as
+    /// `DataError::Http` rather than the prior `eprintln!` + continue.
+    /// Uses an RFC 6761 `.invalid` TLD which is guaranteed never to
+    /// resolve, so the call fails fast at DNS without hitting any real
+    /// server or waiting for a TCP timeout.
+    #[test]
+    fn is_stale_propagates_http_error_on_unreachable_host() {
+        let url = "http://nx.invalid/never-resolves";
+        let meta = FileMeta {
+            url: url.into(),
+            downloaded_at: 0,
+            content_length: Some(1),
+            last_modified: None,
+            md5: String::new(),
+        };
+        let err = is_stale(url, &meta).unwrap_err();
+        assert!(
+            matches!(err, DataError::Http(_)),
+            "expected DataError::Http, got {err:?}"
+        );
     }
 
     /// Every kernel declared in `DEFAULT_KERNELS` must be reachable through

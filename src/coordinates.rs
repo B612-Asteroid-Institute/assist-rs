@@ -3,6 +3,14 @@
 //! ASSIST works in **barycentric equatorial ICRF** (AU, AU/day).
 //! THOR's propagator interface uses **heliocentric ecliptic J2000**.
 //! These functions convert between the two.
+//!
+//! The frame conversion is two-step:
+//!
+//! 1. **Origin shift** — add/subtract the Sun's barycentric state to move
+//!    between SSB-centred (barycentric) and Sun-centred (heliocentric) frames.
+//!    See [`bary_to_helio`] / [`helio_to_bary`].
+//! 2. **Axis rotation** — rotate equatorial ↔ ecliptic by the J2000 obliquity.
+//!    See [`equatorial_to_ecliptic`] / [`ecliptic_to_equatorial`].
 
 /// J2000 obliquity of the ecliptic (IAU 2006, radians).
 /// ε = 23°26′21.448″ = 23.4392911° = 0.40909280422 rad
@@ -12,6 +20,34 @@ pub const OBLIQUITY_J2000: f64 = 0.409_092_804_22;
 const COS_EPS: f64 = 0.917_482_062_070_108_2;
 /// sin(ε)
 const SIN_EPS: f64 = 0.397_777_155_929_776_9;
+
+/// Shift origin from SSB to Sun: `helio = bary - sun_bary`. Component-wise on
+/// a 6-element state. Caller supplies `sun` in the same frame as `bary`.
+#[inline]
+pub fn bary_to_helio(bary: &[f64; 6], sun: &[f64; 6]) -> [f64; 6] {
+    [
+        bary[0] - sun[0],
+        bary[1] - sun[1],
+        bary[2] - sun[2],
+        bary[3] - sun[3],
+        bary[4] - sun[4],
+        bary[5] - sun[5],
+    ]
+}
+
+/// Shift origin from Sun to SSB: `bary = helio + sun_bary`. Inverse of
+/// [`bary_to_helio`].
+#[inline]
+pub fn helio_to_bary(helio: &[f64; 6], sun: &[f64; 6]) -> [f64; 6] {
+    [
+        helio[0] + sun[0],
+        helio[1] + sun[1],
+        helio[2] + sun[2],
+        helio[3] + sun[3],
+        helio[4] + sun[4],
+        helio[5] + sun[5],
+    ]
+}
 
 /// Rotate a 6-element state vector [x,y,z,vx,vy,vz] from equatorial to ecliptic.
 ///

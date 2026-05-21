@@ -1,0 +1,84 @@
+name: Release
+
+# Triggers on tags of the form `vMAJOR.MINOR.PATCH` (e.g. `v0.1.0`).
+# Verifies the tag matches Cargo.toml's `version`, runs a dry-run pack,
+# then publishes to crates.io and creates a GitHub release.
+#
+# Requires the repository secret `CARGO_REGISTRY_TOKEN` (crates.io API
+# token scoped to this crate).
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
+
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          set -euo pipefail
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME (=$TAG_VERSION) does not match Cargo.toml version $CARGO_VERSION"
+            exit 1
+          fi
+          echo "Tag and Cargo.toml agree on version $CARGO_VERSION"
+
+      - name: Install ephemeris and Earth-orientation data packages
+        run: |
+          pip install --timeout 600 --retries 5 \
+            naif-de440 \
+            jpl-small-bodies-de441-n16 \
+            mpc-obscodes \
+            naif-eop-high-prec \
+            naif-eop-historical \
+            naif-eop-predict
+
+      - name: Resolve data paths
+        run: |
+          echo "ASSIST_PLANETS_PATH=$(python3 -c 'import naif_de440; print(naif_de440.de440)')" >> $GITHUB_ENV
+          echo "ASSIST_ASTEROIDS_PATH=$(python3 -c 'import jpl_small_bodies_de441_n16 as sb; print(sb.de441_n16)')" >> $GITHUB_ENV
+          echo "MPC_OBSCODES_PATH=$(python3 -c 'from mpc_obscodes import mpc_obscodes; print(mpc_obscodes)')" >> $GITHUB_ENV
+          echo "ASSIST_EOP_HIGH_PREC=$(python3 -c 'import naif_eop_high_prec; print(naif_eop_high_prec.eop_high_prec)')" >> $GITHUB_ENV
+          echo "ASSIST_EOP_HISTORICAL=$(python3 -c 'import naif_eop_historical; print(naif_eop_historical.eop_historical)')" >> $GITHUB_ENV
+          echo "ASSIST_EOP_PREDICT=$(python3 -c 'import naif_eop_predict; print(naif_eop_predict.eop_predict)')" >> $GITHUB_ENV
+
+      - name: Build
+        run: cargo build --release --verbose
+
+      - name: Test
+        run: CC=clang cargo test --release --verbose -- --test-threads=1
+
+      - name: Dry-run publish
+        # Catches packaging issues before the real publish, which is
+        # irreversible on crates.io.
+        run: cargo publish --dry-run
+
+      - name: Publish to crates.io
+        run: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
