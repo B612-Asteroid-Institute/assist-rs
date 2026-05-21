@@ -207,7 +207,7 @@ impl EarthOrientation {
         })
     }
 
-    /// Like [`rotation_itrf_to_j2000`] but keyed on an ephemeris time (seconds
+    /// Like [`Self::rotation_itrf_to_j2000`] but keyed on an ephemeris time (seconds
     /// past J2000 TDB). Used internally and by callers that already have ET,
     /// bypassing the ~2.5e-7 s precision loss of an MJD round-trip.
     pub fn rotation_itrf_to_j2000_et(&self, et: f64) -> Result<[[f64; 3]; 3]> {

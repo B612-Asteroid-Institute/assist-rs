@@ -49,7 +49,7 @@ pub fn helio_to_bary(helio: &[f64; 6], sun: &[f64; 6]) -> [f64; 6] {
     ]
 }
 
-/// Rotate a 6-element state vector [x,y,z,vx,vy,vz] from equatorial to ecliptic.
+/// Rotate a 6-element state vector `[x, y, z, vx, vy, vz]` from equatorial to ecliptic.
 ///
 /// Rotation about the x-axis by +ε (equatorial → ecliptic):
 /// ```text
