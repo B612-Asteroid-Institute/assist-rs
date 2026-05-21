@@ -1,6 +1,0 @@
-[submodule "vendor/rebound"]
-	path = vendor/rebound
-	url = https://github.com/hannorein/rebound.git
-[submodule "vendor/assist"]
-	path = vendor/assist
-	url = https://github.com/matthewholman/assist.git

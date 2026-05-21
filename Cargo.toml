@@ -1,25 +1,28 @@
 [package]
 name = "assist-rs"
-version = "1.2.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.85.0"
-description = "Rust FFI bindings and safe wrappers for ASSIST + REBOUND N-body integration"
+description = "Domain layer for ASSIST + REBOUND solar-system propagation: orbits, ephemerides, observatories, STM, batch + parallel"
+authors = [
+    "Joachim Moeyens <joachim@b612foundation.org>",
+    "Alec Koumjian <alec@b612foundation.org>",
+    "Kathleen Kiker <kathleen@b612foundation.org>",
+    "Nate Tellis <nate@b612foundation.org>",
+]
+repository = "https://github.com/B612-Asteroid-Institute/assist-rs"
+homepage = "https://asteroid.institute/"
+documentation = "https://docs.rs/assist-rs"
 license = "GPL-3.0"
-links = "assist"
-
-[package.metadata.vendored]
-assist = "1.2.0"
-rebound = "4.6.0"
 
 [features]
 default = ["data", "parallel"]
 data = ["dep:ureq", "dep:flate2", "dep:md5"]
 parallel = ["dep:rayon"]
 
-[build-dependencies]
-cc = "1"
-
 [dependencies]
+libassist-sys = "1.2"
+librebound-sys = "4.6"
 libc = "0.2"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
