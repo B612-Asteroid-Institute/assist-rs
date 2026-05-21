@@ -23,6 +23,21 @@ fn load_data() -> Option<assist_rs::AssistData> {
     load_ephem().map(assist_rs::AssistData::new)
 }
 
+/// Resolve the MPC obscodes JSON, preferring the explicit `MPC_OBSCODES_PATH`
+/// env var (CI) and falling back to the default ~/.cache/assist-rs location.
+fn obscodes_path() -> Option<PathBuf> {
+    let explicit = std::env::var("MPC_OBSCODES_PATH")
+        .map(PathBuf::from)
+        .ok()
+        .filter(|p| p.exists());
+    if explicit.is_some() {
+        return explicit;
+    }
+    let cache =
+        PathBuf::from(std::env::var("HOME").ok()?).join(".cache/assist-rs/obscodes_extended.json");
+    cache.exists().then_some(cache)
+}
+
 #[test]
 fn test_create_simulation() {
     // No ephemeris needed — just test that REBOUND creates/frees cleanly.
@@ -71,7 +86,15 @@ fn test_concurrent_assistsim_matches_serial() {
     // Serial baseline.
     let serial: Vec<[f64; 6]> = (0..N)
         .map(|_| {
-            assist_rs::assist_propagate_single(&data, &orbit, &targets, false, &assist_rs::IntegratorConfig::default()).unwrap()[0].state
+            assist_rs::assist_propagate_single(
+                &data,
+                &orbit,
+                &targets,
+                false,
+                &assist_rs::IntegratorConfig::default(),
+            )
+            .unwrap()[0]
+                .state
         })
         .collect();
     // All serial runs must be bitwise identical (same IC, same integrator).
@@ -87,7 +110,15 @@ fn test_concurrent_assistsim_matches_serial() {
     let parallel: Vec<[f64; 6]> = (0..N)
         .into_par_iter()
         .map(|_| {
-            assist_rs::assist_propagate_single(&data, &orbit, &targets, false, &assist_rs::IntegratorConfig::default()).unwrap()[0].state
+            assist_rs::assist_propagate_single(
+                &data,
+                &orbit,
+                &targets,
+                false,
+                &assist_rs::IntegratorConfig::default(),
+            )
+            .unwrap()[0]
+                .state
         })
         .collect();
     for (i, p) in parallel.iter().enumerate() {
@@ -112,8 +143,11 @@ fn test_integrate_empty_sim_maps_to_no_particles() {
     // No particles added — integrate should fail with NoParticles.
     let err = asim.integrate(1.0).unwrap_err();
     assert!(
-        matches!(err, assist_rs::Error::NoParticles),
-        "expected Error::NoParticles, got {err:?}"
+        matches!(
+            err,
+            libassist_sys::Error::Reb(librebound_sys::Error::NoParticles)
+        ),
+        "expected Reb(NoParticles), got {err:?}"
     );
 }
 
@@ -206,7 +240,14 @@ fn test_propagate_ceres() {
 
     // Propagate 30 days forward
     let target = [orbit.epoch + 30.0];
-    let results = assist_rs::assist_propagate_single(&data, &orbit, &target, false, &assist_rs::IntegratorConfig::default()).unwrap();
+    let results = assist_rs::assist_propagate_single(
+        &data,
+        &orbit,
+        &target,
+        false,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
 
     assert_eq!(results.len(), 1);
     let r = &results[0];
@@ -254,7 +295,14 @@ fn test_propagate_with_stm() {
     );
     let target = [orbit.epoch + 10.0];
 
-    let results = assist_rs::assist_propagate_single(&data, &orbit, &target, true, &assist_rs::IntegratorConfig::default()).unwrap();
+    let results = assist_rs::assist_propagate_single(
+        &data,
+        &orbit,
+        &target,
+        true,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
 
     assert_eq!(results.len(), 1);
     let stm = results[0].stm.expect("STM should be populated");
@@ -334,8 +382,14 @@ fn test_generate_ephemeris() {
     // Observer at geocenter
     let observer = assist_rs::Observer::new(assist_rs::Origin::Earth, 60010.0);
 
-    let results =
-        assist_rs::assist_generate_ephemeris_single(&data, &orbit, &[observer], Some(1), &assist_rs::IntegratorConfig::default()).unwrap();
+    let results = assist_rs::assist_generate_ephemeris_single(
+        &data,
+        &orbit,
+        &[observer],
+        Some(1),
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
 
     assert_eq!(results.len(), 1);
     let eph = &results[0];
@@ -401,12 +455,26 @@ fn test_propagate_with_non_grav() {
 
     // Propagate without non-grav forces (baseline)
     let orbit_grav = assist_rs::Orbit::new(ceres_state, epoch);
-    let baseline = assist_rs::assist_propagate_single(&data, &orbit_grav, &target, false, &assist_rs::IntegratorConfig::default()).unwrap();
+    let baseline = assist_rs::assist_propagate_single(
+        &data,
+        &orbit_grav,
+        &target,
+        false,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
 
     // Propagate with a small transverse non-grav acceleration (A2)
     let ng = assist_rs::NonGravParams::new(0.0, 1e-10, 0.0);
     let orbit_ng = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng);
-    let with_ng = assist_rs::assist_propagate_single(&data, &orbit_ng, &target, false, &assist_rs::IntegratorConfig::default()).unwrap();
+    let with_ng = assist_rs::assist_propagate_single(
+        &data,
+        &orbit_ng,
+        &target,
+        false,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
 
     // The states should differ
     let dx: f64 = (0..6)
@@ -454,7 +522,14 @@ fn test_nongrav_partials_match_finite_differences() {
     let a = [2e-10, 1e-10, -5e-11];
     let ng = assist_rs::NonGravParams::new(a[0], a[1], a[2]);
     let orbit = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng);
-    let with_partials = assist_rs::assist_propagate_single(&data, &orbit, &target, true, &assist_rs::IntegratorConfig::default()).unwrap();
+    let with_partials = assist_rs::assist_propagate_single(
+        &data,
+        &orbit,
+        &target,
+        true,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     assert!(with_partials[0].stm.is_some(), "STM not populated");
     let partials = with_partials[0]
         .nongrav_partials
@@ -473,8 +548,22 @@ fn test_nongrav_partials_match_finite_differences() {
         let ng_minus = assist_rs::NonGravParams::new(a_minus[0], a_minus[1], a_minus[2]);
         let o_plus = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng_plus);
         let o_minus = assist_rs::Orbit::with_non_grav(ceres_state, epoch, ng_minus);
-        let s_plus = assist_rs::assist_propagate_single(&data, &o_plus, &target, false, &assist_rs::IntegratorConfig::default()).unwrap();
-        let s_minus = assist_rs::assist_propagate_single(&data, &o_minus, &target, false, &assist_rs::IntegratorConfig::default()).unwrap();
+        let s_plus = assist_rs::assist_propagate_single(
+            &data,
+            &o_plus,
+            &target,
+            false,
+            &assist_rs::IntegratorConfig::default(),
+        )
+        .unwrap();
+        let s_minus = assist_rs::assist_propagate_single(
+            &data,
+            &o_minus,
+            &target,
+            false,
+            &assist_rs::IntegratorConfig::default(),
+        )
+        .unwrap();
 
         for row in 0..6 {
             let fd = (s_plus[0].state[row] - s_minus[0].state[row]) / (2.0 * h);
@@ -509,7 +598,14 @@ fn test_nongrav_partials_absent_without_nongrav() {
         0.001_174_22,
     ];
     let orbit = assist_rs::Orbit::new(ceres_state, 60000.0);
-    let result = assist_rs::assist_propagate_single(&data, &orbit, &[60030.0], true, &assist_rs::IntegratorConfig::default()).unwrap();
+    let result = assist_rs::assist_propagate_single(
+        &data,
+        &orbit,
+        &[60030.0],
+        true,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     assert!(result[0].stm.is_some());
     assert!(
         result[0].nongrav_partials.is_none(),
@@ -571,10 +667,21 @@ fn test_pool_matches_assist_propagate_gravity_only() {
     let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
     let targets = [60030.0, 60090.0];
 
-    let reference = assist_rs::assist_propagate_single(&data, &orbit, &targets, false, &assist_rs::IntegratorConfig::default()).unwrap();
+    let reference = assist_rs::assist_propagate_single(
+        &data,
+        &orbit,
+        &targets,
+        false,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
 
-    let mut pool =
-        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::gravity_only(), &assist_rs::IntegratorConfig::default()).unwrap();
+    let mut pool = assist_rs::PropagatorPool::new(
+        &data,
+        assist_rs::PropagatorConfig::gravity_only(),
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     let pooled = pool.propagate(&orbit, &targets).unwrap();
 
     assert_eq!(reference.len(), pooled.len());
@@ -593,10 +700,20 @@ fn test_pool_matches_assist_propagate_with_stm() {
     let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
     let targets = [60030.0];
 
-    let reference = assist_rs::assist_propagate_single(&data, &orbit, &targets, true, &assist_rs::IntegratorConfig::default()).unwrap();
-    let mut pool =
-        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::gravity_with_stm(), &assist_rs::IntegratorConfig::default())
-            .unwrap();
+    let reference = assist_rs::assist_propagate_single(
+        &data,
+        &orbit,
+        &targets,
+        true,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
+    let mut pool = assist_rs::PropagatorPool::new(
+        &data,
+        assist_rs::PropagatorConfig::gravity_with_stm(),
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     let pooled = pool.propagate(&orbit, &targets).unwrap();
 
     assert_eq!(
@@ -633,13 +750,25 @@ fn test_pool_reuse_across_different_orbits() {
     // Independent reference runs.
     let refs: Vec<Vec<assist_rs::PropagatedState>> = orbits
         .iter()
-        .map(|o| assist_rs::assist_propagate_single(&data, o, &targets, true, &assist_rs::IntegratorConfig::default()).unwrap())
+        .map(|o| {
+            assist_rs::assist_propagate_single(
+                &data,
+                o,
+                &targets,
+                true,
+                &assist_rs::IntegratorConfig::default(),
+            )
+            .unwrap()
+        })
         .collect();
 
     // Pooled runs.
-    let mut pool =
-        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::gravity_with_stm(), &assist_rs::IntegratorConfig::default())
-            .unwrap();
+    let mut pool = assist_rs::PropagatorPool::new(
+        &data,
+        assist_rs::PropagatorConfig::gravity_with_stm(),
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     let pooled: Vec<Vec<assist_rs::PropagatedState>> = orbits
         .iter()
         .map(|o| pool.propagate(o, &targets).unwrap())
@@ -682,10 +811,20 @@ fn test_pool_with_nongrav_partials() {
     let orbit = assist_rs::Orbit::with_non_grav(CERES_STATE, 60000.0, ng);
     let targets = [60030.0];
 
-    let reference = assist_rs::assist_propagate_single(&data, &orbit, &targets, true, &assist_rs::IntegratorConfig::default()).unwrap();
-    let mut pool =
-        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::nongrav_with_stm(), &assist_rs::IntegratorConfig::default())
-            .unwrap();
+    let reference = assist_rs::assist_propagate_single(
+        &data,
+        &orbit,
+        &targets,
+        true,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
+    let mut pool = assist_rs::PropagatorPool::new(
+        &data,
+        assist_rs::PropagatorConfig::nongrav_with_stm(),
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     let pooled = pool.propagate(&orbit, &targets).unwrap();
 
     assert_eq!(
@@ -716,9 +855,12 @@ fn test_pool_rejects_orbit_with_wrong_nongrav_flag() {
     };
 
     // Gravity-only pool, but we hand it an orbit that carries non-grav params.
-    let mut grav_pool =
-        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::gravity_with_stm(), &assist_rs::IntegratorConfig::default())
-            .unwrap();
+    let mut grav_pool = assist_rs::PropagatorPool::new(
+        &data,
+        assist_rs::PropagatorConfig::gravity_with_stm(),
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     let ng = assist_rs::NonGravParams::new(1e-10, 0.0, 0.0);
     let orbit_ng = assist_rs::Orbit::with_non_grav(CERES_STATE, 60000.0, ng);
     let err = grav_pool.propagate(&orbit_ng, &[60030.0]).unwrap_err();
@@ -728,9 +870,12 @@ fn test_pool_rejects_orbit_with_wrong_nongrav_flag() {
     );
 
     // And the reverse: non-grav pool, gravity-only orbit.
-    let mut ng_pool =
-        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::nongrav_with_stm(), &assist_rs::IntegratorConfig::default())
-            .unwrap();
+    let mut ng_pool = assist_rs::PropagatorPool::new(
+        &data,
+        assist_rs::PropagatorConfig::nongrav_with_stm(),
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     let orbit_grav = assist_rs::Orbit::new(CERES_STATE, 60000.0);
     let err = ng_pool.propagate(&orbit_grav, &[60030.0]).unwrap_err();
     assert!(
@@ -745,8 +890,12 @@ fn test_pool_empty_target_list() {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
-    let mut pool =
-        assist_rs::PropagatorPool::new(&data, assist_rs::PropagatorConfig::gravity_only(), &assist_rs::IntegratorConfig::default()).unwrap();
+    let mut pool = assist_rs::PropagatorPool::new(
+        &data,
+        assist_rs::PropagatorConfig::gravity_only(),
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
     let result = pool.propagate(&orbit, &[]).unwrap();
     assert!(result.is_empty());
@@ -770,11 +919,26 @@ fn test_propagate_batch_matches_serial_loop() {
     ];
     let targets = [60030.0, 60090.0, 60365.0];
 
-    let batch = assist_rs::assist_propagate(&data, &orbits, &targets, false, None, &assist_rs::IntegratorConfig::default()).unwrap();
+    let batch = assist_rs::assist_propagate(
+        &data,
+        &orbits,
+        &targets,
+        false,
+        None,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     assert_eq!(batch.len(), orbits.len());
 
     for (i, orbit) in orbits.iter().enumerate() {
-        let serial = assist_rs::assist_propagate_single(&data, orbit, &targets, false, &assist_rs::IntegratorConfig::default()).unwrap();
+        let serial = assist_rs::assist_propagate_single(
+            &data,
+            orbit,
+            &targets,
+            false,
+            &assist_rs::IntegratorConfig::default(),
+        )
+        .unwrap();
         assert_eq!(batch[i].len(), serial.len());
         for (j, (b, s)) in batch[i].iter().zip(serial.iter()).enumerate() {
             assert_eq!(
@@ -791,7 +955,15 @@ fn test_propagate_batch_empty_orbits() {
         eprintln!("Skipping: ephemeris not available");
         return;
     };
-    let result = assist_rs::assist_propagate(&data, &[], &[60030.0], false, None, &assist_rs::IntegratorConfig::default()).unwrap();
+    let result = assist_rs::assist_propagate(
+        &data,
+        &[],
+        &[60030.0],
+        false,
+        None,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     assert!(result.is_empty());
 }
 
@@ -812,13 +984,29 @@ fn test_propagate_batch_num_threads_modes_agree() {
     ];
     let targets = [60030.0];
 
-    let default_pool = assist_rs::assist_propagate(&data, &orbits, &targets, false, None, &assist_rs::IntegratorConfig::default()).unwrap();
+    let default_pool = assist_rs::assist_propagate(
+        &data,
+        &orbits,
+        &targets,
+        false,
+        None,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     for (nt, label) in [
         (Some(1), "serial"),
         (Some(2), "2 threads"),
         (Some(4), "4 threads"),
     ] {
-        let got = assist_rs::assist_propagate(&data, &orbits, &targets, false, nt, &assist_rs::IntegratorConfig::default()).unwrap();
+        let got = assist_rs::assist_propagate(
+            &data,
+            &orbits,
+            &targets,
+            false,
+            nt,
+            &assist_rs::IntegratorConfig::default(),
+        )
+        .unwrap();
         for i in 0..orbits.len() {
             assert_eq!(
                 default_pool[i][0].state, got[i][0].state,
@@ -839,17 +1027,47 @@ fn test_generate_ephemeris_num_threads_modes_agree() {
         .map(|i| assist_rs::Observer::new(assist_rs::Origin::Earth, 60000.0 + 6.0 * i as f64))
         .collect();
 
-    let default_pool =
-        assist_rs::assist_generate_ephemeris_single(&data, &orbit, &observers, None, &assist_rs::IntegratorConfig::default()).unwrap();
+    let default_pool = assist_rs::assist_generate_ephemeris_single(
+        &data,
+        &orbit,
+        &observers,
+        None,
+        &assist_rs::IntegratorConfig::default(),
+    )
+    .unwrap();
     for (nt, label) in [(Some(1), "serial"), (Some(3), "3 threads")] {
-        let got =
-            assist_rs::assist_generate_ephemeris_single(&data, &orbit, &observers, nt, &assist_rs::IntegratorConfig::default()).unwrap();
+        let got = assist_rs::assist_generate_ephemeris_single(
+            &data,
+            &orbit,
+            &observers,
+            nt,
+            &assist_rs::IntegratorConfig::default(),
+        )
+        .unwrap();
         for i in 0..observers.len() {
-            assert_eq!(
-                default_pool[i].spherical, got[i].spherical,
-                "observer {i} / {label}: spherical differs"
+            assert_spherical_close(
+                &default_pool[i].spherical,
+                &got[i].spherical,
+                1e-12,
+                &format!("observer {i} / {label}"),
             );
         }
+    }
+}
+
+/// Element-wise tolerance compare on a 6-element [rho, ra, dec, drho, dra, ddec]
+/// vector. Used by the rayon-mode-agreement tests where IAS15 integration
+/// history differs by chunk count and produces ULP-level (~1e-15) divergence
+/// in the last digits of f64. A 1e-12 tolerance still catches real numerical
+/// divergence (>1 mas, >1 µas/s) while accepting harmless rounding.
+#[track_caller]
+fn assert_spherical_close(a: &[f64; 6], b: &[f64; 6], tol: f64, ctx: &str) {
+    for (i, (av, bv)) in a.iter().zip(b.iter()).enumerate() {
+        let d = (av - bv).abs();
+        assert!(
+            d < tol,
+            "{ctx}: element {i} differs by {d:.3e} (tol={tol:.0e})\n  left:  {a:?}\n  right: {b:?}"
+        );
     }
 }
 
@@ -876,20 +1094,36 @@ fn test_generate_ephemeris_batch_matches_per_orbit_single() {
     let reference: Vec<Vec<assist_rs::EphemerisResult>> = orbits
         .iter()
         .map(|o| {
-            assist_rs::assist_generate_ephemeris_single(&data, o, &observers, Some(1), &assist_rs::IntegratorConfig::default()).unwrap()
+            assist_rs::assist_generate_ephemeris_single(
+                &data,
+                o,
+                &observers,
+                Some(1),
+                &assist_rs::IntegratorConfig::default(),
+            )
+            .unwrap()
         })
         .collect();
 
     // Batch, both serial and parallel modes should match.
     for nt in [Some(1), None, Some(2)] {
-        let got = assist_rs::assist_generate_ephemeris(&data, &orbits, &observers, nt, &assist_rs::IntegratorConfig::default()).unwrap();
+        let got = assist_rs::assist_generate_ephemeris(
+            &data,
+            &orbits,
+            &observers,
+            nt,
+            &assist_rs::IntegratorConfig::default(),
+        )
+        .unwrap();
         assert_eq!(got.len(), orbits.len());
         for (i, (ref_orbit, got_orbit)) in reference.iter().zip(&got).enumerate() {
             assert_eq!(got_orbit.len(), observers.len());
             for (j, (r, g)) in ref_orbit.iter().zip(got_orbit).enumerate() {
-                assert_eq!(
-                    r.spherical, g.spherical,
-                    "orbit {i} / observer {j} / num_threads={nt:?}: spherical differs"
+                assert_spherical_close(
+                    &r.spherical,
+                    &g.spherical,
+                    1e-12,
+                    &format!("orbit {i} / observer {j} / num_threads={nt:?}"),
                 );
             }
         }
@@ -911,7 +1145,10 @@ fn test_integrator_config_round_trip() {
     assert_eq!(sim.dt(), 1e-6);
     assert_eq!(sim.ias15_epsilon(), 1e-7);
     assert_eq!(sim.ias15_min_dt(), 1e-9);
-    assert_eq!(sim.ias15_adaptive_mode(), assist_rs::Ias15AdaptiveMode::Global);
+    assert_eq!(
+        sim.ias15_adaptive_mode(),
+        assist_rs::Ias15AdaptiveMode::Global
+    );
     // Counter is monotone-from-zero on a fresh sim that hasn't stepped.
     assert_eq!(sim.ias15_iterations_max_exceeded(), 0);
 }
@@ -942,4 +1179,72 @@ fn test_integrator_config_applied_to_propagation() {
     let orbit = assist_rs::Orbit::new(CERES_STATE, 60000.0);
     let result = pool.propagate(&orbit, &[60030.0]).unwrap();
     assert_eq!(result.len(), 1);
+}
+
+// ─── Silent-fallback removal: ground obs requires EOP ────────────────────
+
+/// A ground-based observatory (e.g. Cerro Pachon, MPC code I11) used to
+/// silently fall back to an IAU GMST approximation good only to ~50 mas
+/// when no `EarthOrientation` kernel was attached. The wrapper now returns
+/// `Error::MissingEarthOrientation` so callers cannot accidentally rely
+/// on the low-precision path. This test pins that behaviour.
+#[test]
+fn test_ground_observatory_without_eop_errors() {
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let Some(obs_path) = obscodes_path() else {
+        eprintln!("Skipping: obscodes_extended.json not available");
+        return;
+    };
+    let obs_table = assist_rs::ObservatoryTable::from_json(&obs_path).unwrap();
+    // No `.with_earth_orientation(...)` — this is the path we want to test.
+    let data = assist_rs::AssistData::new(ephem).with_observatory(obs_table);
+
+    let result = assist_rs::assist_get_state(
+        &data,
+        &assist_rs::Origin::Observatory("I11".into()),
+        &[60000.0],
+        Some(1),
+    );
+
+    match result {
+        Err(assist_rs::Error::MissingEarthOrientation(code)) => {
+            assert_eq!(code, "I11", "error should name the offending obs code");
+        }
+        other => panic!("expected Error::MissingEarthOrientation, got {other:?}"),
+    }
+}
+
+/// Space-based and geocentric observatories don't need ITRF rotation —
+/// they live at Earth-system barycentre coordinates already. Verify that
+/// the `MissingEarthOrientation` rule doesn't accidentally block them.
+#[test]
+fn test_geocentric_observatory_works_without_eop() {
+    let Some(ephem) = load_ephem() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let Some(obs_path) = obscodes_path() else {
+        eprintln!("Skipping: obscodes_extended.json not available");
+        return;
+    };
+    let obs_table = assist_rs::ObservatoryTable::from_json(&obs_path).unwrap();
+    let data = assist_rs::AssistData::new(ephem).with_observatory(obs_table);
+
+    // "500" = geocentric. "245" = Spitzer (space-based). Both should succeed
+    // without an EOP kernel because they don't need an ITRF rotation.
+    for code in ["500", "245"] {
+        let result = assist_rs::assist_get_state(
+            &data,
+            &assist_rs::Origin::Observatory(code.into()),
+            &[60000.0],
+            Some(1),
+        );
+        assert!(
+            result.is_ok(),
+            "obs code {code} should work without EOP; got {result:?}"
+        );
+    }
 }

@@ -74,7 +74,14 @@ fn bench_propagate_single(c: &mut Criterion) {
             &targets,
             |b, targets| {
                 b.iter(|| {
-                    assist_rs::assist_propagate_single(&data, &orbit, targets, false, &assist_rs::IntegratorConfig::default()).unwrap()
+                    assist_rs::assist_propagate_single(
+                        &data,
+                        &orbit,
+                        targets,
+                        false,
+                        &assist_rs::IntegratorConfig::default(),
+                    )
+                    .unwrap()
                 });
             },
         );
@@ -91,10 +98,28 @@ fn bench_propagate_with_stm(c: &mut Criterion) {
 
     c.benchmark_group("propagate_stm")
         .bench_function("without_stm", |b| {
-            b.iter(|| assist_rs::assist_propagate_single(&data, &orbit, &targets, false, &assist_rs::IntegratorConfig::default()).unwrap());
+            b.iter(|| {
+                assist_rs::assist_propagate_single(
+                    &data,
+                    &orbit,
+                    &targets,
+                    false,
+                    &assist_rs::IntegratorConfig::default(),
+                )
+                .unwrap()
+            });
         })
         .bench_function("with_stm", |b| {
-            b.iter(|| assist_rs::assist_propagate_single(&data, &orbit, &targets, true, &assist_rs::IntegratorConfig::default()).unwrap());
+            b.iter(|| {
+                assist_rs::assist_propagate_single(
+                    &data,
+                    &orbit,
+                    &targets,
+                    true,
+                    &assist_rs::IntegratorConfig::default(),
+                )
+                .unwrap()
+            });
         });
 }
 
@@ -109,12 +134,26 @@ fn bench_propagate_with_nongrav(c: &mut Criterion) {
     c.benchmark_group("propagate_nongrav")
         .bench_function("gravity_only", |b| {
             b.iter(|| {
-                assist_rs::assist_propagate_single(&data, &orbit_grav, &targets, false, &assist_rs::IntegratorConfig::default()).unwrap()
+                assist_rs::assist_propagate_single(
+                    &data,
+                    &orbit_grav,
+                    &targets,
+                    false,
+                    &assist_rs::IntegratorConfig::default(),
+                )
+                .unwrap()
             });
         })
         .bench_function("with_a2", |b| {
             b.iter(|| {
-                assist_rs::assist_propagate_single(&data, &orbit_ng, &targets, false, &assist_rs::IntegratorConfig::default()).unwrap()
+                assist_rs::assist_propagate_single(
+                    &data,
+                    &orbit_ng,
+                    &targets,
+                    false,
+                    &assist_rs::IntegratorConfig::default(),
+                )
+                .unwrap()
             });
         });
 }
@@ -191,7 +230,16 @@ fn bench_rust_vs_raw_c(c: &mut Criterion) {
     let mut group = c.benchmark_group("rust_vs_raw_c");
 
     group.bench_function("rust_api", |b| {
-        b.iter(|| assist_rs::assist_propagate_single(&data, &orbit, &targets, false, &assist_rs::IntegratorConfig::default()).unwrap());
+        b.iter(|| {
+            assist_rs::assist_propagate_single(
+                &data,
+                &orbit,
+                &targets,
+                false,
+                &assist_rs::IntegratorConfig::default(),
+            )
+            .unwrap()
+        });
     });
 
     group.bench_function("raw_c_ffi", |b| {
@@ -225,7 +273,14 @@ fn bench_parallel_propagation(c: &mut Criterion) {
             orbits
                 .iter()
                 .map(|orbit| {
-                    assist_rs::assist_propagate_single(&data, orbit, &targets, false, &assist_rs::IntegratorConfig::default()).unwrap()
+                    assist_rs::assist_propagate_single(
+                        &data,
+                        orbit,
+                        &targets,
+                        false,
+                        &assist_rs::IntegratorConfig::default(),
+                    )
+                    .unwrap()
                 })
                 .collect::<Vec<_>>()
         });
@@ -237,7 +292,14 @@ fn bench_parallel_propagation(c: &mut Criterion) {
             orbits
                 .par_iter()
                 .map(|orbit| {
-                    assist_rs::assist_propagate_single(&data, orbit, &targets, false, &assist_rs::IntegratorConfig::default()).unwrap()
+                    assist_rs::assist_propagate_single(
+                        &data,
+                        orbit,
+                        &targets,
+                        false,
+                        &assist_rs::IntegratorConfig::default(),
+                    )
+                    .unwrap()
                 })
                 .collect::<Vec<_>>()
         });
@@ -259,7 +321,16 @@ fn bench_duration_scaling(c: &mut Criterion) {
     for days in [1, 10, 30, 100, 365] {
         let targets = vec![EPOCH + days as f64];
         group.bench_with_input(BenchmarkId::new("days", days), &targets, |b, targets| {
-            b.iter(|| assist_rs::assist_propagate_single(&data, &orbit, targets, false, &assist_rs::IntegratorConfig::default()).unwrap());
+            b.iter(|| {
+                assist_rs::assist_propagate_single(
+                    &data,
+                    &orbit,
+                    targets,
+                    false,
+                    &assist_rs::IntegratorConfig::default(),
+                )
+                .unwrap()
+            });
         });
     }
 
@@ -311,7 +382,14 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
             b.iter(|| {
                 for o in &orbits {
                     criterion::black_box(
-                        assist_rs::assist_propagate_single(&data, o, &targets, false, &assist_rs::IntegratorConfig::default()).unwrap(),
+                        assist_rs::assist_propagate_single(
+                            &data,
+                            o,
+                            &targets,
+                            false,
+                            &assist_rs::IntegratorConfig::default(),
+                        )
+                        .unwrap(),
                     );
                 }
             });
@@ -323,7 +401,8 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
                     assist_rs::PropagatorPool::new(
                         &data,
                         assist_rs::PropagatorConfig::gravity_only(),
-                    &assist_rs::IntegratorConfig::default(),)
+                        &assist_rs::IntegratorConfig::default(),
+                    )
                     .unwrap()
                 },
                 |mut pool| {
@@ -341,7 +420,14 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
             b.iter(|| {
                 for o in &orbits {
                     criterion::black_box(
-                        assist_rs::assist_propagate_single(&data, o, &targets, true, &assist_rs::IntegratorConfig::default()).unwrap(),
+                        assist_rs::assist_propagate_single(
+                            &data,
+                            o,
+                            &targets,
+                            true,
+                            &assist_rs::IntegratorConfig::default(),
+                        )
+                        .unwrap(),
                     );
                 }
             });
@@ -353,7 +439,8 @@ fn bench_pool_vs_unpooled(c: &mut Criterion) {
                     assist_rs::PropagatorPool::new(
                         &data,
                         assist_rs::PropagatorConfig::gravity_with_stm(),
-                    &assist_rs::IntegratorConfig::default(),)
+                        &assist_rs::IntegratorConfig::default(),
+                    )
                     .unwrap()
                 },
                 |mut pool| {
@@ -400,13 +487,32 @@ fn bench_propagate_batch(c: &mut Criterion) {
         b.iter(|| {
             orbits
                 .iter()
-                .map(|o| assist_rs::assist_propagate_single(&data, o, &targets, false, &assist_rs::IntegratorConfig::default()).unwrap())
+                .map(|o| {
+                    assist_rs::assist_propagate_single(
+                        &data,
+                        o,
+                        &targets,
+                        false,
+                        &assist_rs::IntegratorConfig::default(),
+                    )
+                    .unwrap()
+                })
                 .collect::<Vec<_>>()
         });
     });
 
     group.bench_function("batch_api_128", |b| {
-        b.iter(|| assist_rs::assist_propagate(&data, &orbits, &targets, false, None, &assist_rs::IntegratorConfig::default()).unwrap());
+        b.iter(|| {
+            assist_rs::assist_propagate(
+                &data,
+                &orbits,
+                &targets,
+                false,
+                None,
+                &assist_rs::IntegratorConfig::default(),
+            )
+            .unwrap()
+        });
     });
 
     group.finish();
@@ -423,7 +529,14 @@ fn bench_generate_ephemeris(c: &mut Criterion) {
     let mut group = c.benchmark_group("generate_ephemeris");
     group.bench_function("earth_7_observers_30d", |b| {
         b.iter(|| {
-            assist_rs::assist_generate_ephemeris_single(&data, &orbit, &observers, Some(1), &assist_rs::IntegratorConfig::default()).unwrap()
+            assist_rs::assist_generate_ephemeris_single(
+                &data,
+                &orbit,
+                &observers,
+                Some(1),
+                &assist_rs::IntegratorConfig::default(),
+            )
+            .unwrap()
         });
     });
     group.finish();

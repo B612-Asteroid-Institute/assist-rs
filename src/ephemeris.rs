@@ -2,13 +2,17 @@
 //! light-time correction and topocentric spherical output.
 
 use crate::assist_data::AssistData;
-use crate::coordinates::{cartesian_to_spherical, ecliptic_to_equatorial, equatorial_to_ecliptic};
-use crate::ffi;
+use crate::coordinates::{
+    bary_to_helio, cartesian_to_spherical, ecliptic_to_equatorial, equatorial_to_ecliptic,
+    helio_to_bary,
+};
+use libassist_sys::ffi;
+use libassist_sys::{AssistSim, Ephemeris, IntegratorConfig, Simulation};
+
 use crate::observatory::ObservatoryTable;
 use crate::orbit::Orbit;
 use crate::origin::Origin;
 use crate::state::resolve_origin_state;
-use crate::wrappers::{AssistSim, Ephemeris, IntegratorConfig, Simulation};
 use crate::{Error, Result};
 
 /// Ephemeris result for a single observer epoch.
@@ -80,13 +84,72 @@ pub fn assist_generate_ephemeris_single(
     let ephem = &data.ephem;
     let obs_table = data.observatory.as_ref();
     let c = ephem.c_au_per_day();
-    let op = |obs: &Observer| -> Result<EphemerisResult> {
-        // One simulation per observer — reused across the initial
-        // propagation and every light-time iteration.
-        let mut sim = EphemerisSim::new(ephem, orbit, integrator)?;
-        compute_single_ephemeris(ephem, &mut sim, obs, c, obs_table)
+
+    // Sort observers by epoch so each thread's chunk integrates monotonically
+    // forward. `EphemerisSim::integrate_to` uses `integrate_or_interpolate`,
+    // which extends the IAS15 trajectory and serves polynomial interpolation
+    // for in-step queries — both depend on processing observers in time order
+    // to amortize integrator state across the whole observer set.
+    let mut indexed: Vec<(usize, &Observer)> = observers.iter().enumerate().collect();
+    indexed.sort_by(|a, b| {
+        a.1.epoch
+            .partial_cmp(&b.1.epoch)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Build chunks of contiguous-in-time observers, one per worker. Each
+    // chunk reuses a single `EphemerisSim` so the per-observer cost is the
+    // marginal IAS15 integration to the next epoch, not a full cold-start.
+    // Without this, 73 800 observers spent 90+% of wall time on
+    // `Simulation::new` + force attach + first IAS15 step.
+    let n_workers = match num_threads {
+        Some(0) => {
+            return Err(Error::Other(
+                "num_threads = Some(0) is not valid; use None for the default pool".into(),
+            ));
+        }
+        Some(n) => n,
+        None => {
+            #[cfg(feature = "parallel")]
+            {
+                rayon::current_num_threads().max(1)
+            }
+            #[cfg(not(feature = "parallel"))]
+            {
+                1
+            }
+        }
     };
-    crate::propagate::map_with_threads(observers, num_threads, op)
+    let n_workers = n_workers.min(indexed.len()).max(1);
+    let chunk_size = indexed.len().div_ceil(n_workers);
+    let chunks: Vec<&[(usize, &Observer)]> = indexed.chunks(chunk_size).collect();
+
+    // Per-chunk worker: build one EphemerisSim, integrate observers in order,
+    // emit (orig_index, EphemerisResult) so we can reorder back to caller's
+    // original observer ordering.
+    let process_chunk = |chunk: &&[(usize, &Observer)]| -> Result<Vec<(usize, EphemerisResult)>> {
+        let mut sim = EphemerisSim::new(ephem, orbit, integrator)?;
+        let mut out = Vec::with_capacity(chunk.len());
+        for &(orig_idx, obs) in chunk.iter() {
+            let r = compute_single_ephemeris(ephem, &mut sim, obs, c, obs_table)?;
+            out.push((orig_idx, r));
+        }
+        Ok(out)
+    };
+
+    let chunk_results: Vec<Vec<(usize, EphemerisResult)>> =
+        crate::propagate::map_with_threads(&chunks, num_threads, process_chunk)?;
+
+    // Scatter chunk results back into caller's original ordering.
+    let mut out: Vec<Option<EphemerisResult>> = (0..observers.len()).map(|_| None).collect();
+    for chunk in chunk_results {
+        for (idx, r) in chunk {
+            out[idx] = Some(r);
+        }
+    }
+    out.into_iter()
+        .map(|opt| opt.ok_or_else(|| Error::Other("missing ephemeris result for observer".into())))
+        .collect()
 }
 
 /// Generate ephemeris for many orbits viewed from a shared set of observers.
@@ -189,42 +252,16 @@ fn compute_single_ephemeris(
     // SSB). Using heliocentric states would introduce a spurious offset
     // equal to the Sun's barycentric displacement during the light travel
     // time, which reaches ~9 mas for TNOs.
-    let jd_ref = ephem.jd_ref();
     let t_emit = t_obs - tau;
-    let t_obs_a = mjd_to_assist_time(t_obs, jd_ref);
-    let t_emit_a = mjd_to_assist_time(t_emit, jd_ref);
+    let t_obs_a = ephem.mjd_to_assist_time(t_obs);
+    let t_emit_a = ephem.mjd_to_assist_time(t_emit);
 
-    let sun_obs = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t_obs_a)?;
-    let sun_emit = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t_emit_a)?;
+    let sun_obs = ephem.get_body_state_array(ffi::ASSIST_BODY_SUN, t_obs_a)?;
+    let sun_emit = ephem.get_body_state_array(ffi::ASSIST_BODY_SUN, t_emit_a)?;
 
-    let obs_helio_eq = ecliptic_to_equatorial(&obs_state);
-    let obs_bary_eq = [
-        obs_helio_eq[0] + sun_obs.x,
-        obs_helio_eq[1] + sun_obs.y,
-        obs_helio_eq[2] + sun_obs.z,
-        obs_helio_eq[3] + sun_obs.vx,
-        obs_helio_eq[4] + sun_obs.vy,
-        obs_helio_eq[5] + sun_obs.vz,
-    ];
-
-    let ast_helio_eq = ecliptic_to_equatorial(&aberrated_state);
-    let ast_bary_eq = [
-        ast_helio_eq[0] + sun_emit.x,
-        ast_helio_eq[1] + sun_emit.y,
-        ast_helio_eq[2] + sun_emit.z,
-        ast_helio_eq[3] + sun_emit.vx,
-        ast_helio_eq[4] + sun_emit.vy,
-        ast_helio_eq[5] + sun_emit.vz,
-    ];
-
-    let topo_eq = [
-        ast_bary_eq[0] - obs_bary_eq[0],
-        ast_bary_eq[1] - obs_bary_eq[1],
-        ast_bary_eq[2] - obs_bary_eq[2],
-        ast_bary_eq[3] - obs_bary_eq[3],
-        ast_bary_eq[4] - obs_bary_eq[4],
-        ast_bary_eq[5] - obs_bary_eq[5],
-    ];
+    let obs_bary_eq = helio_to_bary(&ecliptic_to_equatorial(&obs_state), &sun_obs);
+    let ast_bary_eq = helio_to_bary(&ecliptic_to_equatorial(&aberrated_state), &sun_emit);
+    let topo_eq = bary_to_helio(&ast_bary_eq, &obs_bary_eq);
 
     let dx_eq = [topo_eq[0], topo_eq[1], topo_eq[2]];
     let dv_eq = [topo_eq[3], topo_eq[4], topo_eq[5]];
@@ -248,79 +285,37 @@ fn compute_single_ephemeris(
 struct EphemerisSim<'a> {
     asim: AssistSim,
     ephem: &'a Ephemeris,
-    jd_ref: f64,
 }
 
 impl<'a> EphemerisSim<'a> {
     fn new(ephem: &'a Ephemeris, orbit: &Orbit, integrator: &IntegratorConfig) -> Result<Self> {
-        let jd_ref = ephem.jd_ref();
-        let t0 = mjd_to_assist_time(orbit.epoch, jd_ref);
+        use crate::propagate::{
+            add_particles_and_variationals, apply_nongrav_scalars, configure_forces,
+            install_particle_params,
+        };
 
-        // Heliocentric ecliptic → barycentric equatorial ICRF
-        let eq_state = ecliptic_to_equatorial(&orbit.state);
-        let sun = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t0)?;
-        let bary_state = [
-            eq_state[0] + sun.x,
-            eq_state[1] + sun.y,
-            eq_state[2] + sun.z,
-            eq_state[3] + sun.vx,
-            eq_state[4] + sun.vy,
-            eq_state[5] + sun.vz,
-        ];
+        let t0 = ephem.mjd_to_assist_time(orbit.epoch);
+
+        // Heliocentric ecliptic → barycentric equatorial ICRF.
+        let sun = ephem.get_body_state_array(ffi::ASSIST_BODY_SUN, t0)?;
+        let bary_state = helio_to_bary(&ecliptic_to_equatorial(&orbit.state), &sun);
 
         let mut sim = Simulation::new()?;
         sim.set_t(t0);
         integrator.apply(&mut sim);
         let mut asim = AssistSim::new(sim, ephem)?;
 
-        let non_grav = orbit.non_grav.as_ref();
-        let mut forces = ffi::ASSIST_FORCES_DEFAULT;
-        if non_grav.is_some() {
-            forces |= ffi::ASSIST_FORCE_NON_GRAVITATIONAL;
-        }
-        asim.set_forces(forces);
+        let has_nongrav = orbit.non_grav.is_some();
+        configure_forces(&mut asim, has_nongrav);
+        // Ephemeris generation never uses variational equations (n_var = 0).
+        add_particles_and_variationals(&mut asim, &bary_state, 0);
 
-        asim.sim_mut().add_test_particle(
-            bary_state[0],
-            bary_state[1],
-            bary_state[2],
-            bary_state[3],
-            bary_state[4],
-            bary_state[5],
-        );
-
-        if let Some(ng) = non_grav {
-            if let Some(v) = ng.alpha {
-                asim.set_alpha(v);
-            }
-            if let Some(v) = ng.nk {
-                asim.set_nk(v);
-            }
-            if let Some(v) = ng.nm {
-                asim.set_nm(v);
-            }
-            if let Some(v) = ng.nn {
-                asim.set_nn(v);
-            }
-            if let Some(v) = ng.r0 {
-                asim.set_r0(v);
-            }
+        if let Some(ng) = orbit.non_grav.as_ref() {
+            apply_nongrav_scalars(&mut asim, ng);
+            install_particle_params(&mut asim, ng, false);
         }
 
-        if let Some(ng) = non_grav {
-            let n_total = asim.sim().n_particles();
-            let mut params = vec![0.0f64; 3 * n_total];
-            params[0] = ng.a1;
-            params[1] = ng.a2;
-            params[2] = ng.a3;
-            asim.set_particle_params(params);
-        }
-
-        Ok(Self {
-            asim,
-            ephem,
-            jd_ref,
-        })
+        Ok(Self { asim, ephem })
     }
 
     /// Integrate to the given epoch (MJD TDB) and return the heliocentric
@@ -338,7 +333,7 @@ impl<'a> EphemerisSim<'a> {
     /// by femtoseconds-to-microseconds per iteration and successive
     /// t_emit values cluster inside the last completed step.
     fn integrate_to(&mut self, mjd_tdb: f64) -> Result<[f64; 6]> {
-        let t_target = mjd_to_assist_time(mjd_tdb, self.jd_ref);
+        let t_target = self.ephem.mjd_to_assist_time(mjd_tdb);
         self.asim.integrate_or_interpolate(t_target)?;
 
         let particles = self.asim.sim().particles();
@@ -348,19 +343,9 @@ impl<'a> EphemerisSim<'a> {
         let p = &particles[0];
         let bary_eq = [p.x, p.y, p.z, p.vx, p.vy, p.vz];
 
-        let sun_t = self.ephem.get_body_state(ffi::ASSIST_BODY_SUN, t_target)?;
-        let helio_eq = [
-            bary_eq[0] - sun_t.x,
-            bary_eq[1] - sun_t.y,
-            bary_eq[2] - sun_t.z,
-            bary_eq[3] - sun_t.vx,
-            bary_eq[4] - sun_t.vy,
-            bary_eq[5] - sun_t.vz,
-        ];
-        Ok(equatorial_to_ecliptic(&helio_eq))
+        let sun_t = self
+            .ephem
+            .get_body_state_array(ffi::ASSIST_BODY_SUN, t_target)?;
+        Ok(equatorial_to_ecliptic(&bary_to_helio(&bary_eq, &sun_t)))
     }
-}
-
-fn mjd_to_assist_time(mjd_tdb: f64, jd_ref: f64) -> f64 {
-    (mjd_tdb + 2_400_000.5) - jd_ref
 }

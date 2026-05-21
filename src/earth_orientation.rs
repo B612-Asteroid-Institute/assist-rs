@@ -165,16 +165,28 @@ pub struct EarthOrientation {
 
 impl EarthOrientation {
     /// Load and merge one or more binary PCK kernel files.
+    ///
+    /// Each file must contribute at least one usable segment (ITRF93 body
+    /// 3000, ECLIPJ2000 frame, Chebyshev type 2). A file whose segments are
+    /// all skipped is rejected — the previous behaviour silently dropped
+    /// such files and only flagged the empty-result case at the very end,
+    /// hiding which input was the problem.
     pub fn from_paths<P: AsRef<Path>>(paths: &[P]) -> Result<Self> {
         let mut segments = Vec::new();
         for path in paths {
             let path_ref = path.as_ref();
             let mut file_segments = load_pck(path_ref)?;
+            if file_segments.is_empty() {
+                return Err(EarthOrientationError::BadFormat(format!(
+                    "{}: no ITRF93/ECLIPJ2000/Chebyshev-Type-2 segments found",
+                    path_ref.display()
+                )));
+            }
             segments.append(&mut file_segments);
         }
         if segments.is_empty() {
             return Err(EarthOrientationError::BadFormat(
-                "no usable segments found in supplied PCK files".into(),
+                "no PCK kernel paths supplied".into(),
             ));
         }
         Ok(Self { segments })
@@ -323,13 +335,17 @@ fn load_pck(path: &Path) -> Result<Vec<Type2Segment>> {
     }
 
     // ── Filter to Earth / ECLIPJ2000 / Chebyshev, decode each ──
+    //
+    // Segments outside this triple (e.g. type-1 Lagrange or non-Earth bodies
+    // in a combined PCK) cannot be evaluated by this loader and are skipped.
+    // The caller surfaces an error when an entire file contributes zero
+    // usable segments, so a misnamed file can't slip through silently.
     let mut out = Vec::new();
     for info in segment_infos {
         if info.body != BODY_ITRF93
             || info.frame != FRAME_ECLIPJ2000
             || info.dtype != PCK_TYPE_CHEBYSHEV
         {
-            // Silently skip segments we don't know how to evaluate.
             continue;
         }
         out.push(load_type2_segment(&mut file, &info, path)?);
@@ -1040,5 +1056,59 @@ mod tests {
             - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
             + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
         assert!((det - 1.0).abs() < 1e-14, "det(R) = {det}");
+    }
+
+    // ─── Empty / no-usable-segments error path ───────────────────────────
+
+    /// `from_paths(&[])` must not silently produce an `EarthOrientation`
+    /// with zero segments — every rotation lookup against it would then
+    /// fail with the misleading `OutOfRange`. The empty-paths case is its
+    /// own error.
+    #[test]
+    fn empty_paths_slice_returns_error() {
+        let empty: &[&std::path::Path] = &[];
+        let err = EarthOrientation::from_paths(empty).unwrap_err();
+        assert!(matches!(err, EarthOrientationError::BadFormat(_)));
+    }
+
+    /// Build a minimal but valid DAF/PCK file record with no summary
+    /// records (`FWARD = 0`). The parser must walk zero summaries, find
+    /// zero usable segments, and `from_paths` must raise the per-file
+    /// error (rather than silently dropping the file as the pre-fix
+    /// behaviour did).
+    #[test]
+    fn pck_with_no_usable_segments_is_per_file_error() {
+        let mut header = [0u8; DAF_RECORD_BYTES];
+        // LOCIDW: "DAF/PCK " (8 bytes)
+        header[..8].copy_from_slice(b"DAF/PCK ");
+        // ND = 2 (i32 LE)
+        header[8..12].copy_from_slice(&2i32.to_le_bytes());
+        // NI = 5 (i32 LE)
+        header[12..16].copy_from_slice(&5i32.to_le_bytes());
+        // FWARD = 0 → no summary records to walk.
+        header[76..80].copy_from_slice(&0i32.to_le_bytes());
+        // LOCFMT: "LTL-IEEE" at offset 88..96
+        header[88..96].copy_from_slice(b"LTL-IEEE");
+
+        let dir = tempfile::tempdir().unwrap();
+        let pck_path = dir.path().join("empty.bpc");
+        std::fs::write(&pck_path, header).unwrap();
+
+        let err = EarthOrientation::from_paths(&[&pck_path]).unwrap_err();
+        match err {
+            EarthOrientationError::BadFormat(msg) => {
+                assert!(
+                    msg.contains(pck_path.to_str().unwrap()),
+                    "error should name the offending file; got: {msg}"
+                );
+                assert!(
+                    msg.contains("no ITRF93")
+                        || msg.contains("Chebyshev")
+                        || msg.contains("ECLIPJ2000"),
+                    "error should explain what was missing; got: {msg}"
+                );
+            }
+            other => panic!("expected BadFormat, got {other:?}"),
+        }
     }
 }

@@ -9,8 +9,9 @@
 //! matches how real workflows load these resources: once at startup, all
 //! together, held for the lifetime of the process.
 
+use libassist_sys::Ephemeris;
+
 use crate::observatory::ObservatoryTable;
-use crate::wrappers::Ephemeris;
 
 /// Bundle of the data resources the high-level `assist_*` functions need.
 ///

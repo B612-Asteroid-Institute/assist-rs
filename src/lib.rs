@@ -1,21 +1,24 @@
-//! Rust FFI bindings and safe wrappers for ASSIST + REBOUND.
+//! High-level domain layer for ASSIST + REBOUND solar-system propagation.
 //!
-//! ASSIST is a C library for ephemeris-quality integration of test particles
-//! in the solar system, built on top of the REBOUND N-body code. This crate
-//! provides:
+//! The raw FFI bindings and safe RAII wrappers live in the companion
+//! `libassist-sys` crate (which itself depends on `librebound-sys` for the
+//! REBOUND C ABI). This crate adds:
 //!
-//! - [`ffi`]: Raw `extern "C"` bindings to REBOUND and ASSIST functions.
-//! - [`Simulation`], [`Ephemeris`], [`AssistSim`]: Safe RAII wrappers.
-//! - High-level free functions for the THOR propagator interface:
-//!   single-orbit [`assist_propagate_single`] /
-//!   [`assist_generate_ephemeris_single`] and their batched (and optionally
-//!   rayon-parallel) counterparts [`assist_propagate`] /
-//!   [`assist_generate_ephemeris`], plus [`assist_get_state`].
-
-pub mod ffi;
-mod wrappers;
-
-pub use wrappers::{AssistSim, Ephemeris, Ias15AdaptiveMode, IntegratorConfig, Simulation};
+//! - [`Orbit`] + [`NonGravParams`] + [`Origin`] + [`AssistData`]: domain
+//!   types for orbital states, non-gravitational coefficients, coordinate
+//!   origins, and the bundled (ephemeris + observatory table) data handle.
+//! - [`ObservatoryTable`] + [`earth_orientation`]: MPC observatory lookups
+//!   and Earth-orientation kernel handling for topocentric observations.
+//! - [`propagate`]: single-orbit + batched + rayon-parallel propagators,
+//!   [`PropagatorPool`] for reusing simulations across many orbits, and STM
+//!   + covariance propagation.
+//! - [`ephemeris`]: topocentric ephemeris generation with light-time
+//!   iteration.
+//! - [`data`] (feature `data`): a [`data::DataManager`] that fetches +
+//!   caches ephemeris and Earth-orientation kernels.
+//!
+//! All of `libassist-sys`'s public surface is re-exported here so downstream
+//! consumers can keep a single `assist_rs` import.
 
 mod assist_data;
 pub mod coordinates;
@@ -42,37 +45,23 @@ pub use propagate::{
 };
 pub use state::{BodyState, assist_get_state};
 
+// Re-export the FFI + RAII layer so downstream code keeps using `assist_rs::*`
+// for both domain types and low-level sim/ephemeris handles.
+pub use libassist_sys::{
+    AssistSim, Ephemeris, Ias15AdaptiveMode, IntegratorConfig, Simulation, ffi,
+};
+// Re-export the sys crates themselves so downstream code can pattern-match on
+// nested error variants (Error::Sys(libassist_sys::Error::Reb(_))) and access
+// raw FFI symbols by their canonical paths if needed.
+pub use {libassist_sys, librebound_sys};
+
 /// Error type for assist-rs operations.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Integration ended early because no particles remain (`REB_STATUS_NO_PARTICLES`).
-    #[error("integration ended: no particles remain in the simulation")]
-    NoParticles,
-
-    /// Integration ended early because two particles had a close encounter
-    /// (`REB_STATUS_ENCOUNTER`; triggered by `exit_min_distance`).
-    #[error("integration ended: close encounter")]
-    CloseEncounter,
-
-    /// Integration ended early because a particle escaped
-    /// (`REB_STATUS_ESCAPE`; triggered by `exit_max_distance`).
-    #[error("integration ended: particle escape")]
-    Escape,
-
-    /// Integration ended early because two particles collided
-    /// (`REB_STATUS_COLLISION`).
-    #[error("integration ended: collision")]
-    Collision,
-
-    /// REBOUND returned a generic/unknown error status.
-    ///
-    /// Holds the raw `REB_STATUS` code for diagnostics; use the named variants
-    /// above to match on the common integration-exit conditions.
-    #[error("REBOUND integration failed with status {0}")]
-    IntegrationFailed(i32),
-
-    #[error("ASSIST ephemeris error: {0}")]
-    EphemerisError(String),
+    /// Wrapped FFI-layer error from libassist-sys (which itself wraps
+    /// `librebound_sys::Error` for REBOUND integration-exit conditions).
+    #[error(transparent)]
+    Sys(#[from] libassist_sys::Error),
 
     #[error("light-time iteration did not converge after {0} iterations")]
     LightTimeConvergence(usize),
@@ -83,11 +72,23 @@ pub enum Error {
     #[error("invalid observatory code: {0}")]
     InvalidObservatory(String),
 
+    #[error(
+        "observatory {0} requires Earth orientation kernel; \
+         attach via ObservatoryTable::with_earth_orientation"
+    )]
+    MissingEarthOrientation(String),
+
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
     #[error("{0}")]
     Other(String),
+}
+
+impl From<librebound_sys::Error> for Error {
+    fn from(e: librebound_sys::Error) -> Self {
+        Error::Sys(libassist_sys::Error::Reb(e))
+    }
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

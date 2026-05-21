@@ -276,9 +276,14 @@ fn test_propagation_against_horizons() {
                 .map(|v| jd_to_mjd(v.jd_tdb))
                 .collect();
 
-            let propagated =
-                assist_rs::assist_propagate_single(&data, &orbit, &target_epochs, false, &assist_rs::IntegratorConfig::default())
-                    .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", entry.object_id));
+            let propagated = assist_rs::assist_propagate_single(
+                &data,
+                &orbit,
+                &target_epochs,
+                false,
+                &assist_rs::IntegratorConfig::default(),
+            )
+            .unwrap_or_else(|e| panic!("Propagation failed for {}: {e}", entry.object_id));
 
             let mut rows: Vec<(f64, f64, f64)> = Vec::new(); // (dt, pos_err_m, vel_err_m_s)
             for (prop, href) in propagated.iter().zip(entry.vectors_bary_eq.iter()) {
@@ -385,8 +390,8 @@ fn test_ephemeris_against_horizons_v2() {
             obs_table.with_earth_orientation(eo)
         }
         None => {
-            eprintln!("WARNING: no EO kernel; using GMST fallback");
-            obs_table
+            eprintln!("Skipping: Earth orientation kernel not available");
+            return;
         }
     };
 
@@ -442,14 +447,19 @@ fn test_ephemeris_against_horizons_v2() {
                 })
                 .collect();
 
-            let predicted =
-                assist_rs::assist_generate_ephemeris_single(&data, &orbit, &observers, Some(1), &assist_rs::IntegratorConfig::default())
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "Ephemeris failed for {} @ {}: {e}",
-                            entry.object_id, obs_code
-                        )
-                    });
+            let predicted = assist_rs::assist_generate_ephemeris_single(
+                &data,
+                &orbit,
+                &observers,
+                Some(1),
+                &assist_rs::IntegratorConfig::default(),
+            )
+            .unwrap_or_else(|e| {
+                panic!(
+                    "Ephemeris failed for {} @ {}: {e}",
+                    entry.object_id, obs_code
+                )
+            });
 
             let mut rows = Vec::new();
             for (pr, href) in predicted.iter().zip(horizons_obs.iter()) {
