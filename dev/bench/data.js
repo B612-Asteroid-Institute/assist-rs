@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776796709173,
+  "lastUpdate": 1779388474498,
   "repoUrl": "https://github.com/B612-Asteroid-Institute/assist-rs",
   "entries": {
     "assist-rs Benchmarks": [
@@ -665,6 +665,192 @@ window.BENCHMARK_DATA = {
             "name": "generate_ephemeris/earth_7_observers_30d",
             "value": 2426031,
             "range": "± 12596",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "moeyensj@users.noreply.github.com",
+            "name": "Joachim Moeyens",
+            "username": "moeyensj"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0e13f52a790bcf757780a3c551a3139f3fda4693",
+          "message": "Extract -sys crates; remove silent fallbacks; expand tests + docs (#9)\n\n* Extract sys crates; depend on librebound-sys 4.6 + libassist-sys 1.2\n\nDrops the vendored REBOUND + ASSIST C sources, build.rs, raw FFI module,\nand RAII wrappers from this crate. Those now live in two new companion\n`-sys` crates published to crates.io:\n\n- librebound-sys 4.6.0 — REBOUND ABI + Simulation/IntegratorConfig RAII\n- libassist-sys  1.2.0 — ASSIST ABI + Ephemeris/AssistSim RAII\n\nassist-rs becomes a pure domain-layer crate (Orbit, Origin, Observer,\nDataManager, propagation, ephemeris generation) on top of those two.\nBoth -sys crates are vendored at their upstream release tags as git\nsubmodules and tracked in their own repos; nothing C-side ships from\nthis crate anymore.\n\nCargo.toml:\n- version 1.2.0 -> 0.1.0 (assist-rs now follows standard Rust semver,\n  decoupled from the upstream C library cadence)\n- deps: libassist-sys = \"1.2\", librebound-sys = \"4.6\" (registry, no\n  path)\n- adds authors / repository / homepage / documentation metadata\n\nCargo.lock regenerated to point at registry sources for both -sys crates.\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n\n* Remove silent fallbacks, dedupe frame transforms, expand tests + docs\n\nSilent-fallback removal (caller can't accidentally rely on low-precision\nor stale-data behaviour without seeing an explicit error):\n\n- state.rs: ground-based observatory without an attached EarthOrientation\n  kernel now returns Error::MissingEarthOrientation instead of silently\n  falling back to a ~50 mas IAU GMST approximation. Geocentric / space-\n  based observatories (\"500\", \"245\", etc.) still work without EOP.\n- observatory.rs: strict obscodes_extended.json parsing. Ground entries\n  must carry Longitude+cos+sin+Name; space entries must carry only Name;\n  partial / non-numeric entries error rather than silently defaulting to\n  NaN/0.\n- data.rs: DataManager::ensure_ready now propagates MD5 compute errors\n  and HEAD staleness errors instead of eprintln!+continue. Callers that\n  want offline-tolerant behaviour can use offline() instead.\n- origin.rs: Origin::parse returns Result. Unknown strings that don't\n  match a known body name and aren't valid 3-char alphanumeric MPC codes\n  now error instead of silently becoming Observatory(s) and failing\n  later with a misleading \"unknown MPC code\" message.\n- earth_orientation.rs: from_paths now errors per-file when a PCK\n  contributes zero usable segments, naming the offending path. Previous\n  behaviour silently dropped such files and only surfaced an empty-set\n  error at the end.\n- libassist-sys 1.2: update_nongrav_coeffs returns Result instead of\n  silently no-op'ing when set_particle_params hasn't been called.\n\nCode dedup:\n\n- coordinates.rs: bary_to_helio + helio_to_bary helpers for the Sun-\n  state add/subtract pattern that was inlined 8+ places.\n- libassist-sys 1.2: Ephemeris::mjd_to_assist_time method (was defined\n  three times in this crate) and get_body_state_array convenience\n  (eliminates [p.x, p.y, ...] boilerplate at 6+ sites).\n- propagate.rs: factor configure_forces / apply_nongrav_scalars /\n  add_particles_and_variationals / install_particle_params as pub(crate)\n  helpers; ephemeris.rs's EphemerisSim::new now reuses them instead of\n  inlining the setup logic.\n- propagate.rs PropagatorPool: drop the cached jd_ref field (use the\n  Ephemeris method instead).\n\nTests:\n\n- tests/smoke_test.rs: relax bit-equality assertions in\n  test_generate_ephemeris_num_threads_modes_agree and\n  test_generate_ephemeris_batch_matches_per_orbit_single to element-wise\n  1e-12 tolerance via new assert_spherical_close helper. The original\n  asserts failed on rayon-chunk-count-dependent ULP-level FP rounding\n  while still catching any real numerical divergence (>1 mas).\n- tests/smoke_test.rs: new test_ground_observatory_without_eop_errors\n  and test_geocentric_observatory_works_without_eop pinning the new\n  EOP-required behaviour.\n- tests/horizons_v2_test.rs: skip cleanly when EOP unavailable (was\n  printing a warning and proceeding with the removed GMST fallback).\n- src/observatory.rs: 4 unit tests for strict JSON parsing.\n- src/origin.rs: 4 unit tests for parse Result + MPC code validation.\n- src/data.rs: 3 unit tests for the strict integrity paths (missing-\n  file MD5, missing sidecar, unreachable-host HEAD).\n- src/earth_orientation.rs: 2 unit tests for the per-file empty-\n  segments error (empty paths slice + synthetic minimal DAF/PCK with\n  FWARD=0).\n\nDocs:\n\n- README.md: rewritten in the B612 Asteroid Institute standard layout.\n  Title + byline + 3-row badge block (REBOUND/ASSIST upstream versions\n  on row 1; CI/crates.io/docs.rs/license on row 2; org GitHub + AI\n  website on row 3). Versioning section explains assist-rs's\n  independent semver vs. the -sys crates' upstream-mirrored scheme.\n  Acknowledgments explicitly credit upstream maintainers (Matthew\n  Holman for ASSIST, Hanno Rein for REBOUND) with citation pointer.\n\nCI:\n\n- .github/CODEOWNERS routes review on every change to\n  @B612-Asteroid-Institute/rust-maintainers.\n- .github/workflows/release.yml: tag-triggered cargo publish + GitHub\n  release; runs full test suite (with EOP + obscodes data) and a dry-\n  run publish before the real publish.\n\nCo-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Opus 4.7 (1M context) <noreply@anthropic.com>",
+          "timestamp": "2026-05-21T11:23:20-07:00",
+          "tree_id": "d3df430ae53ca1ba9e7b4de68f9caa76e4a15456",
+          "url": "https://github.com/B612-Asteroid-Institute/assist-rs/commit/0e13f52a790bcf757780a3c551a3139f3fda4693"
+        },
+        "date": 1779388474061,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "propagate_single/rust_api/1",
+            "value": 452464,
+            "range": "± 21029",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_single/rust_api/10",
+            "value": 1184481,
+            "range": "± 15449",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_single/rust_api/100",
+            "value": 9105005,
+            "range": "± 421500",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_stm/without_stm",
+            "value": 450363,
+            "range": "± 7561",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_stm/with_stm",
+            "value": 1003738,
+            "range": "± 23089",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_nongrav/gravity_only",
+            "value": 455777,
+            "range": "± 2764",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_nongrav/with_a2",
+            "value": 481495,
+            "range": "± 1883",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rust_vs_raw_c/rust_api",
+            "value": 451695,
+            "range": "± 3569",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "rust_vs_raw_c/raw_c_ffi",
+            "value": 450544,
+            "range": "± 3406",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel/serial_28_orbits",
+            "value": 12821909,
+            "range": "± 290215",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "parallel/rayon_28_orbits",
+            "value": 9872559,
+            "range": "± 98261",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/1",
+            "value": 319108,
+            "range": "± 14681",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/10",
+            "value": 407167,
+            "range": "± 16112",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/30",
+            "value": 452446,
+            "range": "± 8381",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/100",
+            "value": 669972,
+            "range": "± 7869",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "duration_scaling/days/365",
+            "value": 1298519,
+            "range": "± 30877",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_30d/unpooled",
+            "value": 59396213,
+            "range": "± 307114",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_30d/pooled",
+            "value": 58642956,
+            "range": "± 846570",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_30d/unpooled_with_stm",
+            "value": 130025220,
+            "range": "± 506111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_30d/pooled_with_stm",
+            "value": 129366602,
+            "range": "± 712185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_365d/unpooled",
+            "value": 163377228,
+            "range": "± 1296366",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_365d/pooled",
+            "value": 162506672,
+            "range": "± 1676928",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_365d/unpooled_with_stm",
+            "value": 353604194,
+            "range": "± 3037658",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "pool_vs_unpooled_365d/pooled_with_stm",
+            "value": 352778462,
+            "range": "± 1998746",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_batch/serial_loop_128",
+            "value": 59002035,
+            "range": "± 1272527",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "propagate_batch/batch_api_128",
+            "value": 45438596,
+            "range": "± 236975",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "generate_ephemeris/earth_7_observers_30d",
+            "value": 494264,
+            "range": "± 14359",
             "unit": "ns/iter"
           }
         ]
