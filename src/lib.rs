@@ -39,6 +39,7 @@ pub use orbit::{NonGravParams, Orbit};
 pub use origin::Origin;
 pub use propagate::{
     PropagatedState, PropagatorConfig, PropagatorPool, assist_propagate, assist_propagate_single,
+    assist_propagate_states_same_epoch,
 };
 pub use state::{BodyState, assist_get_state};
 

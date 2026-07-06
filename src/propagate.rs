@@ -219,8 +219,9 @@ pub fn assist_propagate(
     num_threads: Option<usize>,
     integrator: &IntegratorConfig,
 ) -> Result<Vec<Vec<PropagatedState>>> {
-    let op =
-        |orbit: &Orbit| assist_propagate_single(data, orbit, target_epochs, compute_stm, integrator);
+    let op = |orbit: &Orbit| {
+        assist_propagate_single(data, orbit, target_epochs, compute_stm, integrator)
+    };
     map_with_threads(orbits, num_threads, op)
 }
 
@@ -267,6 +268,86 @@ where
         let _ = num_threads;
         items.iter().map(&f).collect()
     }
+}
+
+/// N-body propagation of many gravity-only test particles sharing a single
+/// epoch, integrated **together in one simulation**.
+///
+/// Unlike [`assist_propagate`], which builds one simulation per orbit, this
+/// adds every state as a massless test particle to a single REBOUND/ASSIST
+/// simulation and integrates the whole set jointly to each target epoch in
+/// the given order. That amortizes simulation setup and per-step ephemeris
+/// evaluation across the batch, which is the natural shape for workloads
+/// like finite-difference Jacobians (a nominal state plus six perturbed
+/// states at one epoch, as used by least-squares orbit determination) or
+/// Monte Carlo variant clouds sampled at a shared epoch.
+///
+/// States are heliocentric ecliptic J2000 `[x, y, z, vx, vy, vz]`
+/// (AU, AU/day), matching [`assist_propagate_single`]; `epoch` and
+/// `target_epochs` are MJD TDB. Gravity-only: no variational particles, no
+/// non-gravitational forces, no STM.
+///
+/// Because IAS15's adaptive step size is shared by all particles in a
+/// simulation, results can differ from per-orbit [`assist_propagate_single`]
+/// runs at the integrator-tolerance level; test particles are massless and
+/// do not otherwise influence one another.
+///
+/// Shape: the returned `Vec<Vec<[f64; 6]>>` is indexed
+/// `[state_index][target_epoch_index]`.
+///
+/// # Errors
+/// Returns an error if the simulation cannot be constructed, a body state
+/// lookup fails, or integration fails.
+pub fn assist_propagate_states_same_epoch(
+    data: &AssistData,
+    states: &[[f64; 6]],
+    epoch: f64,
+    target_epochs: &[f64],
+    integrator: &IntegratorConfig,
+) -> Result<Vec<Vec<[f64; 6]>>> {
+    if states.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ephem = &data.ephem;
+    let jd_ref = ephem.jd_ref();
+    let t0 = mjd_to_assist_time(epoch, jd_ref);
+
+    let mut sim = Simulation::new()?;
+    sim.set_t(t0);
+    integrator.apply(&mut sim);
+    let mut asim = AssistSim::new(sim, ephem)?;
+    configure_forces(&mut asim, false);
+
+    for state in states {
+        let bary_eq = ecl_orbit_to_bary_eq(state, ephem, t0)?;
+        asim.sim_mut().add_test_particle(
+            bary_eq[0], bary_eq[1], bary_eq[2], bary_eq[3], bary_eq[4], bary_eq[5],
+        );
+    }
+
+    let mut states_by_particle = vec![Vec::with_capacity(target_epochs.len()); states.len()];
+    for &target_mjd in target_epochs {
+        let t_target = mjd_to_assist_time(target_mjd, jd_ref);
+        asim.integrate(t_target)?;
+        let particles = asim.sim().particles();
+        if particles.len() < states.len() {
+            return Err(Error::Other("No particles after integration".into()));
+        }
+        let sun_t = ephem.get_body_state(ffi::ASSIST_BODY_SUN, t_target)?;
+        for (row, p) in particles.iter().take(states.len()).enumerate() {
+            let helio_eq = [
+                p.x - sun_t.x,
+                p.y - sun_t.y,
+                p.z - sun_t.z,
+                p.vx - sun_t.vx,
+                p.vy - sun_t.vy,
+                p.vz - sun_t.vz,
+            ];
+            states_by_particle[row].push(equatorial_to_ecliptic(&helio_eq));
+        }
+    }
+
+    Ok(states_by_particle)
 }
 
 // ─── PropagatorPool: reusable simulation for many-orbit workloads ───────────

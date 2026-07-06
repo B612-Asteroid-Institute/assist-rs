@@ -943,3 +943,79 @@ fn test_integrator_config_applied_to_propagation() {
     let result = pool.propagate(&orbit, &[60030.0]).unwrap();
     assert_eq!(result.len(), 1);
 }
+
+#[test]
+fn test_same_epoch_multi_particle_matches_singles() {
+    // `assist_propagate_states_same_epoch` integrates all particles jointly
+    // in one simulation; each trajectory must agree with its own
+    // `assist_propagate_single` run to well below any scientific tolerance
+    // (differences come only from the shared IAS15 adaptive step size --
+    // test particles are massless and cannot influence one another).
+    let Some(data) = load_data() else {
+        eprintln!("Skipping: ephemeris not available");
+        return;
+    };
+    let integrator = assist_rs::IntegratorConfig::default();
+
+    // Empty input short-circuits without touching the simulation.
+    let empty = assist_rs::assist_propagate_states_same_epoch(
+        &data,
+        &[],
+        60000.0,
+        &[60030.0],
+        &integrator,
+    )
+    .unwrap();
+    assert!(empty.is_empty());
+
+    // Nominal state plus six perturbed states: the finite-difference
+    // Jacobian shape used by least-squares orbit determination.
+    let base = [
+        -1.938_169_72,
+        2.289_213_79,
+        1.094_048_30,
+        -0.008_744_54,
+        -0.005_523_16,
+        0.001_174_22,
+    ];
+    let mut states = vec![base];
+    for dim in 0..6 {
+        let mut perturbed = base;
+        perturbed[dim] += if dim < 3 { 1e-6 } else { 1e-8 };
+        states.push(perturbed);
+    }
+    let epoch = 60000.0;
+    let targets = [60007.5, 60030.0];
+
+    let joint = assist_rs::assist_propagate_states_same_epoch(
+        &data, &states, epoch, &targets, &integrator,
+    )
+    .unwrap();
+    assert_eq!(joint.len(), states.len());
+    for row in &joint {
+        assert_eq!(row.len(), targets.len());
+    }
+
+    for (index, state) in states.iter().enumerate() {
+        let orbit = assist_rs::Orbit::new(*state, epoch);
+        let singles =
+            assist_rs::assist_propagate_single(&data, &orbit, &targets, false, &integrator)
+                .unwrap();
+        for (k, single) in singles.iter().enumerate() {
+            for i in 0..3 {
+                let diff = (joint[index][k][i] - single.state[i]).abs();
+                assert!(
+                    diff < 1e-9,
+                    "particle {index} target {k} position component {i}: |diff| = {diff:e}"
+                );
+            }
+            for i in 3..6 {
+                let diff = (joint[index][k][i] - single.state[i]).abs();
+                assert!(
+                    diff < 1e-11,
+                    "particle {index} target {k} velocity component {i}: |diff| = {diff:e}"
+                );
+            }
+        }
+    }
+}
