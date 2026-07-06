@@ -4,14 +4,20 @@
 //! THOR's propagator interface uses **heliocentric ecliptic J2000**.
 //! These functions convert between the two.
 
-/// J2000 obliquity of the ecliptic (IAU 2006, radians).
-/// ε = 23°26′21.448″ = 23.4392911° = 0.40909280422 rad
-pub const OBLIQUITY_J2000: f64 = 0.409_092_804_22;
+/// J2000 mean obliquity of the ecliptic (radians).
+/// ε = 23°26′21.448″ = 84381.448″ (DE430/DE431) — the same constant adam-core
+/// uses (`Constants.OBLIQUITY = 84381.448 * π / (180 * 3600)`), evaluated in
+/// f64 with that exact expression so the value is bit-identical to adam-core.
+/// (An earlier revision truncated the radian literal to 11 significant
+/// digits, which shifted cos/sin by ~1e-12 ≈ 0.3 m at 1 AU.)
+pub const OBLIQUITY_J2000: f64 = 0.409_092_804_222_328_9;
 
-/// cos(ε) — computed from OBLIQUITY_J2000 via Python's math.cos()
-const COS_EPS: f64 = 0.917_482_062_070_108_2;
-/// sin(ε)
-const SIN_EPS: f64 = 0.397_777_155_929_776_9;
+/// cos(ε) — f64 cosine of `OBLIQUITY_J2000`, bit-identical to adam-core's
+/// rotation matrices (`np.cos(Constants.OBLIQUITY)`).
+const COS_EPS: f64 = 0.917_482_062_069_181_8;
+/// sin(ε) — f64 sine of `OBLIQUITY_J2000`, bit-identical to adam-core's
+/// rotation matrices (`np.sin(Constants.OBLIQUITY)`).
+const SIN_EPS: f64 = 0.397_777_155_931_913_65;
 
 /// Rotate a 6-element state vector [x,y,z,vx,vy,vz] from equatorial to ecliptic.
 ///
@@ -224,6 +230,15 @@ pub fn cartesian_to_spherical_jacobian(dx: [f64; 3], dv: [f64; 3]) -> [[f64; 6];
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn obliquity_constants_are_consistent() {
+        // COS_EPS/SIN_EPS must be the f64 cos/sin of OBLIQUITY_J2000 (allow
+        // 1 ulp for platform libm differences) and orthonormal.
+        assert!((COS_EPS - OBLIQUITY_J2000.cos()).abs() <= 2e-16);
+        assert!((SIN_EPS - OBLIQUITY_J2000.sin()).abs() <= 2e-16);
+        assert!((COS_EPS * COS_EPS + SIN_EPS * SIN_EPS - 1.0).abs() <= 4e-16);
+    }
 
     #[test]
     fn roundtrip_eq_ecl() {

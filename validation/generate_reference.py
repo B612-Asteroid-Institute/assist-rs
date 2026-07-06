@@ -23,14 +23,24 @@ import numpy as np
 import rebound
 import assist
 
-# J2000 obliquity (IAU 2006) — must match assist-rs constants
-OBLIQUITY_J2000 = 0.40909280422  # radians
+# J2000 mean obliquity, 84381.448 arcsec (DE430/DE431) — must match the
+# assist-rs constants, which are bit-identical to adam-core's
+# Constants.OBLIQUITY expression below.
+OBLIQUITY_J2000 = 84381.448 * math.pi / (180.0 * 3600.0)  # radians
 COS_EPS = math.cos(OBLIQUITY_J2000)
 SIN_EPS = math.sin(OBLIQUITY_J2000)
 
 # ASSIST default force flags (must match assist-rs)
 # SUN=0x01 | PLANETS=0x02 | ASTEROIDS=0x04 | EARTH_HARMONICS=0x10 | SUN_HARMONICS=0x20 | GR_EIH=0x40
 ASSIST_FORCES_DEFAULT = 0x01 | 0x02 | 0x04 | 0x10 | 0x20 | 0x40
+
+# Objects excluded from the validation set. 2 Pallas is itself one of the 16
+# massive perturbers in sb441-n16: propagated as a massless test particle it
+# starts at its own mass source, so its trajectory is singular/hyper-chaotic
+# and not reproducible across libassist builds — any last-bit difference in
+# the input or integrator grows to AU scale within days. It validates the
+# pathology, not the propagator.
+EXCLUDED_OBJECT_IDS = {"2 Pallas (A802 FA)"}
 
 
 def ecliptic_to_equatorial(state):
@@ -184,6 +194,9 @@ def load_sample_orbits():
     with open(csv_path) as f:
         reader = csv.DictReader(f)
         for row in reader:
+            if row["targetname"] in EXCLUDED_OBJECT_IDS:
+                print(f"  Excluding {row['targetname']} (self-perturbing massive body)")
+                continue
             orbits.append({
                 "object_id": row["targetname"],
                 "epoch_mjd": float(row["mjd_tdb"]),
