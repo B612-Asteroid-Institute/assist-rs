@@ -1,47 +1,28 @@
-//! Rust FFI bindings and safe wrappers for ASSIST + REBOUND.
+//! Lean Rust FFI bindings and safe wrappers for ASSIST + REBOUND.
 //!
 //! ASSIST is a C library for ephemeris-quality integration of test particles
 //! in the solar system, built on top of the REBOUND N-body code. This crate
-//! provides:
+//! deliberately stays at the binding layer:
 //!
 //! - [`ffi`]: Raw `extern "C"` bindings to REBOUND and ASSIST functions.
-//! - [`Simulation`], [`Ephemeris`], [`AssistSim`]: Safe RAII wrappers.
-//! - High-level free functions for the THOR propagator interface:
-//!   single-orbit [`assist_propagate_single`] /
-//!   [`assist_generate_ephemeris_single`] and their batched (and optionally
-//!   rayon-parallel) counterparts [`assist_propagate`] /
-//!   [`assist_generate_ephemeris`], plus [`assist_get_state`].
+//! - [`Simulation`]: Owned REBOUND simulation (particles, IAS15 knobs,
+//!   integrate/step, variational particles).
+//! - [`Ephemeris`]: Owned ASSIST ephemeris (`Send + Sync`; load once, share
+//!   across threads).
+//! - [`AssistSim`]: A simulation with ASSIST forces attached (force flags,
+//!   non-gravitational model scalars, `particle_params`, integrator reset).
+//! - [`IntegratorConfig`] / [`Ias15AdaptiveMode`]: IAS15 configuration.
+//!
+//! Everything above this layer — frame conventions, orbit containers, batch
+//! or pooled propagation, STM/covariance handling, observatory tables, Earth
+//! orientation, ephemeris generation, and kernel-file discovery — is
+//! intentionally out of scope and owned by consumers (see `adam-assist`'s
+//! `adam_assist_rs`, which hosts the previous high-level orchestration).
 
 pub mod ffi;
 mod wrappers;
 
 pub use wrappers::{AssistSim, Ephemeris, Ias15AdaptiveMode, IntegratorConfig, Simulation};
-
-mod assist_data;
-pub mod coordinates;
-#[cfg(feature = "data")]
-pub mod data;
-pub mod earth_orientation;
-pub mod ephemeris;
-mod observatory;
-mod orbit;
-mod origin;
-pub mod propagate;
-mod state;
-
-pub use assist_data::AssistData;
-pub use coordinates::{ecliptic_to_equatorial, equatorial_to_ecliptic};
-pub use ephemeris::{
-    EphemerisResult, Observer, assist_generate_ephemeris, assist_generate_ephemeris_single,
-};
-pub use observatory::ObservatoryTable;
-pub use orbit::{NonGravParams, Orbit};
-pub use origin::Origin;
-pub use propagate::{
-    PropagatedState, PropagatorConfig, PropagatorPool, assist_propagate, assist_propagate_single,
-    assist_propagate_states_same_epoch,
-};
-pub use state::{BodyState, assist_get_state};
 
 /// Error type for assist-rs operations.
 #[derive(Debug, thiserror::Error)]
@@ -74,18 +55,6 @@ pub enum Error {
 
     #[error("ASSIST ephemeris error: {0}")]
     EphemerisError(String),
-
-    #[error("light-time iteration did not converge after {0} iterations")]
-    LightTimeConvergence(usize),
-
-    #[error("invalid body identifier: {0}")]
-    InvalidBody(String),
-
-    #[error("invalid observatory code: {0}")]
-    InvalidObservatory(String),
-
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
 
     #[error("{0}")]
     Other(String),

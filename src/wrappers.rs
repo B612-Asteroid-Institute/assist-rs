@@ -47,9 +47,7 @@ impl Ias15AdaptiveMode {
 /// Per-call IAS15 integrator knobs. `None` for any field leaves the REBOUND
 /// default in place.
 ///
-/// Applied to a freshly-created [`Simulation`] before any particles are added,
-/// inside [`crate::assist_propagate_single`] / [`crate::assist_generate_ephemeris_single`]
-/// / [`crate::propagate::PropagatorPool::new`].
+/// Apply to a freshly-created [`Simulation`] before any particles are added.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IntegratorConfig {
     /// REBOUND `r->dt` (initial timestep). The integrator picks the sign
@@ -67,7 +65,7 @@ pub struct IntegratorConfig {
 impl IntegratorConfig {
     /// Apply each `Some` field to `sim`. Should be called immediately after
     /// `Simulation::new()` and before adding particles.
-    pub(crate) fn apply(&self, sim: &mut Simulation) {
+    pub fn apply(&self, sim: &mut Simulation) {
         if let Some(dt) = self.initial_dt {
             sim.set_dt(dt);
         }
@@ -456,7 +454,7 @@ impl AssistSim {
     ///
     /// Replacing a previously installed array drops the old storage; the
     /// previous pointer ASSIST held is already overwritten at that point.
-    pub(crate) fn set_particle_params(&mut self, mut params: Vec<f64>) {
+    pub fn set_particle_params(&mut self, mut params: Vec<f64>) {
         let n = self.sim.n_particles();
         assert_eq!(
             params.len(),
@@ -517,7 +515,7 @@ impl AssistSim {
     /// Cheaper than [`reb_integrator_ias15_reset`] (no free/malloc), and
     /// faster in practice: a pool-style benchmark with this helper matches
     /// or beats the unpooled free-function path.
-    pub(crate) fn reset_integrator(&mut self) {
+    pub fn reset_integrator(&mut self) {
         unsafe {
             ffi::assist_rs_ias15_zero_state(self.sim.ptr);
             ffi::assist_rs_ephem_cache_reset(self.ax);
@@ -531,7 +529,7 @@ impl AssistSim {
     /// The variational-particle parameter columns (indices 3 onward) are
     /// orbit-invariant IC perturbations (identity for parameter
     /// variationals, zero for state variationals) and are left untouched.
-    pub(crate) fn update_nongrav_coeffs(&mut self, a1: f64, a2: f64, a3: f64) {
+    pub fn update_nongrav_coeffs(&mut self, a1: f64, a2: f64, a3: f64) {
         if let Some(params) = self.particle_params.as_mut() {
             params[0] = a1;
             params[1] = a2;

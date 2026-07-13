@@ -1,9 +1,9 @@
 [package]
 name = "assist-rs"
-version = "1.2.0"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.85.0"
-description = "Rust FFI bindings and safe wrappers for ASSIST + REBOUND N-body integration"
+description = "Lean Rust FFI bindings and safe wrappers for ASSIST + REBOUND N-body integration"
 license = "GPL-3.0"
 links = "assist"
 
@@ -11,29 +11,9 @@ links = "assist"
 assist = "1.2.0"
 rebound = "4.6.0"
 
-[features]
-default = ["data", "parallel"]
-data = ["dep:ureq", "dep:flate2", "dep:md5"]
-parallel = ["dep:rayon"]
-
 [build-dependencies]
 cc = "1"
 
 [dependencies]
 libc = "0.2"
 thiserror = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-ureq = { version = "3", optional = true }
-flate2 = { version = "1", optional = true }
-md5 = { version = "0.7", optional = true }
-rayon = { version = "1", optional = true }
-
-[dev-dependencies]
-tempfile = "3"
-rayon = "1"
-criterion = { version = "0.5", features = ["html_reports"] }
-
-[[bench]]
-name = "propagation"
-harness = false
