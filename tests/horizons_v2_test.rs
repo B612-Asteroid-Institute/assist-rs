@@ -133,12 +133,12 @@ fn load_earth_orientation() -> Option<assist_rs::earth_orientation::EarthOrienta
         "ASSIST_EOP_PREDICT",
         &[
             "earth_200101_990827_predict.bpc",
-            "earth_2025_250826_2125_predict.bpc",
+            "earth_2026_260806_2126_predict.bpc",
         ],
     );
     let historical = resolve_eop_path(
         "ASSIST_EOP_HISTORICAL",
-        &["earth_620120_240827.bpc", "earth_620120_250826.bpc"],
+        &["earth_620120_240827.bpc", "earth_620120_260806.bpc"],
     );
     let current = resolve_eop_path("ASSIST_EOP_HIGH_PREC", &["earth_latest_high_prec.bpc"])?;
 

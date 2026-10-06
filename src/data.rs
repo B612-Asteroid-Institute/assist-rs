@@ -6,7 +6,7 @@
 //! 2. MPC observatory codes (`obscodes_extended.json`) for observer lookups
 //! 3. Earth orientation binary PCK kernels (`earth_*.bpc`) for sub-mas
 //!    ITRF93 → ICRF rotation of ground-based observatories. Three kernels
-//!    together span 1962 → ~2125: historical, current high-precision, and
+//!    together span 1962 → ~2126: historical, current high-precision, and
 //!    long-term predict.
 //!
 //! [`DataManager`] downloads these to a local cache directory on demand and
@@ -34,6 +34,12 @@
 //! runs, non-static files (the MPC obscodes file and
 //! `earth_latest_high_prec.bpc`) are checked via HEAD and re-downloaded if
 //! the MD5 doesn't match or the remote metadata differs.
+//!
+//! The dated Earth orientation kernels are pinned by filename. When NAIF
+//! publishes a newer pair it moves the old one into `a_old_versions/`, so a
+//! download that gets a 404 from the canonical URL retries that archive URL
+//! (logging both to stderr); the sidecar's `url` records whichever URL served
+//! the file.
 
 use std::fmt;
 use std::fs::{self, File};
@@ -47,6 +53,12 @@ use serde::{Deserialize, Serialize};
 struct KernelEntry {
     filename: &'static str,
     url: &'static str,
+    /// Where upstream keeps this exact file once a newer vintage replaces it
+    /// at `url`. [`download`] falls back here when `url` answers 404, so a
+    /// pinned file stays fetchable after upstream rolls the canonical
+    /// directory. `None` for files that are never moved (immutable
+    /// ephemerides) or that are updated in place rather than archived.
+    archive_url: Option<&'static str>,
     gzipped: bool,
     is_static: bool,
 }
@@ -55,40 +67,52 @@ const DEFAULT_KERNELS: &[KernelEntry] = &[
     KernelEntry {
         filename: "de440.bsp",
         url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/spk/planets/de440.bsp",
+        archive_url: None,
         gzipped: false,
         is_static: true,
     },
     KernelEntry {
         filename: "sb441-n16.bsp",
         url: "https://ssd.jpl.nasa.gov/ftp/eph/small_bodies/asteroids_de441/sb441-n16.bsp",
+        archive_url: None,
         gzipped: false,
         is_static: true,
     },
     KernelEntry {
         filename: "obscodes_extended.json",
         url: "https://minorplanetcenter.net/Extended_Files/obscodes_extended.json.gz",
+        archive_url: None,
         gzipped: true,
         is_static: false,
     },
     // Earth orientation binary PCKs. NAIF periodically republishes the
-    // historical and predict kernels with filenames encoding their coverage;
-    // bump the filenames here when upstream does. `earth_latest_high_prec.bpc`
-    // is a stable endpoint NAIF updates ~weekly.
+    // historical and predict kernels with filenames encoding their coverage
+    // and moves the superseded pair into `pck/a_old_versions/`; bump the
+    // filenames here when upstream does. Until then the archive URL keeps
+    // the pinned pair downloadable. `earth_latest_high_prec.bpc` is a stable
+    // endpoint NAIF updates ~weekly in place, so it has no archive.
     KernelEntry {
         filename: "earth_latest_high_prec.bpc",
         url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/earth_latest_high_prec.bpc",
+        archive_url: None,
         gzipped: false,
         is_static: false,
     },
     KernelEntry {
-        filename: "earth_620120_250826.bpc",
-        url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/earth_620120_250826.bpc",
+        filename: "earth_620120_260806.bpc",
+        url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/earth_620120_260806.bpc",
+        archive_url: Some(
+            "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/a_old_versions/earth_620120_260806.bpc",
+        ),
         gzipped: false,
         is_static: true,
     },
     KernelEntry {
-        filename: "earth_2025_250826_2125_predict.bpc",
-        url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/earth_2025_250826_2125_predict.bpc",
+        filename: "earth_2026_260806_2126_predict.bpc",
+        url: "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/earth_2026_260806_2126_predict.bpc",
+        archive_url: Some(
+            "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/a_old_versions/earth_2026_260806_2126_predict.bpc",
+        ),
         gzipped: false,
         is_static: true,
     },
@@ -121,7 +145,7 @@ pub struct AssistDataPaths {
     pub eop_high_prec: PathBuf,
     /// Historical Earth orientation PCK (1962 → ~present).
     pub eop_historical: PathBuf,
-    /// Long-term Earth orientation predict PCK (~2025 → 2125).
+    /// Long-term Earth orientation predict PCK (~2026 → 2126).
     pub eop_predict: PathBuf,
 }
 
@@ -211,8 +235,8 @@ impl DataManager {
             asteroids: self.data_dir.join("sb441-n16.bsp"),
             obscodes: self.data_dir.join("obscodes_extended.json"),
             eop_high_prec: self.data_dir.join("earth_latest_high_prec.bpc"),
-            eop_historical: self.data_dir.join("earth_620120_250826.bpc"),
-            eop_predict: self.data_dir.join("earth_2025_250826_2125_predict.bpc"),
+            eop_historical: self.data_dir.join("earth_620120_260806.bpc"),
+            eop_predict: self.data_dir.join("earth_2026_260806_2126_predict.bpc"),
         }
     }
 
@@ -334,10 +358,33 @@ fn is_stale(url: &str, meta: &FileMeta) -> Result<bool, DataError> {
     Ok(false)
 }
 
-fn download(entry: &KernelEntry, path: &Path, meta_path: &Path) -> Result<(), DataError> {
-    let response = ureq::get(entry.url)
+/// GET `entry.url`. If that answers 404 and the entry has an
+/// [`KernelEntry::archive_url`], GET the archive URL instead. Returns the URL
+/// that served the response alongside it. Any other failure, or a 404 with
+/// no archive to fall back to, is returned as [`DataError::Http`].
+fn fetch(
+    entry: &KernelEntry,
+) -> Result<(&'static str, ureq::http::Response<ureq::Body>), DataError> {
+    let err = match ureq::get(entry.url).call() {
+        Ok(response) => return Ok((entry.url, response)),
+        Err(e) => e,
+    };
+    let archive = match (&err, entry.archive_url) {
+        (ureq::Error::StatusCode(404), Some(archive)) => archive,
+        _ => return Err(DataError::Http(format!("GET {}: {err}", entry.url))),
+    };
+    eprintln!(
+        "  {} not found at {} (404); downloading the archived copy from {}",
+        entry.filename, entry.url, archive
+    );
+    let response = ureq::get(archive)
         .call()
-        .map_err(|e| DataError::Http(format!("GET {}: {e}", entry.url)))?;
+        .map_err(|e| DataError::Http(format!("GET {archive}: {e}")))?;
+    Ok((archive, response))
+}
+
+fn download(entry: &KernelEntry, path: &Path, meta_path: &Path) -> Result<(), DataError> {
+    let (url, response) = fetch(entry)?;
 
     let content_length: Option<u64> = response
         .headers()
@@ -378,7 +425,7 @@ fn download(entry: &KernelEntry, path: &Path, meta_path: &Path) -> Result<(), Da
         .unwrap()
         .as_secs();
     let meta = FileMeta {
-        url: entry.url.to_string(),
+        url: url.to_string(),
         downloaded_at: now,
         content_length,
         last_modified,
@@ -596,5 +643,187 @@ mod tests {
         assert_eq!(back.content_length, meta.content_length);
         assert_eq!(back.last_modified, meta.last_modified);
         assert_eq!(back.md5, meta.md5);
+    }
+
+    /// The dated Earth orientation PCKs are the only entries NAIF moves into
+    /// `a_old_versions/` when it publishes a newer vintage; each must carry an
+    /// archive URL under that directory with its own filename. Everything
+    /// else is either immutable or updated in place and must carry none.
+    #[test]
+    fn dated_eop_kernels_carry_an_archive_url_and_others_do_not() {
+        let archive_dir = "https://naif.jpl.nasa.gov/pub/naif/generic_kernels/pck/a_old_versions/";
+        let dated = [
+            "earth_620120_260806.bpc",
+            "earth_2026_260806_2126_predict.bpc",
+        ];
+        for name in dated {
+            assert!(
+                DEFAULT_KERNELS.iter().any(|e| e.filename == name),
+                "{name} missing from DEFAULT_KERNELS"
+            );
+        }
+        for entry in DEFAULT_KERNELS {
+            if dated.contains(&entry.filename) {
+                let archive = entry
+                    .archive_url
+                    .unwrap_or_else(|| panic!("{} has no archive_url", entry.filename));
+                assert_eq!(archive, format!("{archive_dir}{}", entry.filename));
+                assert!(entry.url.ends_with(&format!("/pck/{}", entry.filename)));
+            } else {
+                assert!(
+                    entry.archive_url.is_none(),
+                    "{} must not carry an archive_url",
+                    entry.filename
+                );
+            }
+        }
+    }
+
+    /// Serve one canned HTTP response per connection from a local listener,
+    /// in order, and return the base URL plus a handle yielding the request
+    /// lines the server saw.
+    fn serve(responses: Vec<Vec<u8>>) -> (String, std::thread::JoinHandle<Vec<String>>) {
+        use std::io::{BufRead, BufReader};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line).unwrap();
+                seen.push(request_line.trim_end().to_string());
+                // Drain the headers up to the blank line.
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                stream.write_all(&response).unwrap();
+                stream.flush().unwrap();
+            }
+            seen
+        });
+        (base, handle)
+    }
+
+    fn not_found() -> Vec<u8> {
+        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+    }
+
+    fn ok(body: &[u8]) -> Vec<u8> {
+        let mut r = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        r.extend_from_slice(body);
+        r
+    }
+
+    fn leak(s: String) -> &'static str {
+        Box::leak(s.into_boxed_str())
+    }
+
+    /// A 404 at the canonical URL falls back to the archive URL: the file
+    /// lands with the archive's body and the sidecar records the archive URL
+    /// as the one that served it.
+    #[test]
+    fn download_falls_back_to_archive_url_on_404() {
+        let body = b"archived kernel bytes";
+        let (base, server) = serve(vec![not_found(), ok(body)]);
+        let entry = KernelEntry {
+            filename: "kernel.bpc",
+            url: leak(format!("{base}/pck/kernel.bpc")),
+            archive_url: Some(leak(format!("{base}/pck/a_old_versions/kernel.bpc"))),
+            gzipped: false,
+            is_static: true,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(entry.filename);
+        let meta_path = dir.path().join("kernel.bpc.meta.json");
+
+        download(&entry, &path, &meta_path).unwrap();
+
+        let seen = server.join().unwrap();
+        assert_eq!(
+            seen,
+            [
+                "GET /pck/kernel.bpc HTTP/1.1",
+                "GET /pck/a_old_versions/kernel.bpc HTTP/1.1",
+            ]
+        );
+        assert_eq!(fs::read(&path).unwrap(), body);
+        let meta = read_meta(&meta_path).unwrap();
+        assert_eq!(meta.url, entry.archive_url.unwrap());
+        assert_eq!(meta.content_length, Some(body.len() as u64));
+        assert_eq!(meta.md5, compute_md5(&path).unwrap());
+    }
+
+    /// A 404 on an entry with no archive URL propagates as
+    /// `DataError::Http` after a single request, and nothing is written.
+    #[test]
+    fn download_propagates_404_without_archive_url() {
+        let (base, server) = serve(vec![not_found()]);
+        let entry = KernelEntry {
+            filename: "kernel.bpc",
+            url: leak(format!("{base}/pck/kernel.bpc")),
+            archive_url: None,
+            gzipped: false,
+            is_static: true,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(entry.filename);
+        let meta_path = dir.path().join("kernel.bpc.meta.json");
+
+        let err = download(&entry, &path, &meta_path).unwrap_err();
+
+        assert_eq!(server.join().unwrap(), ["GET /pck/kernel.bpc HTTP/1.1"]);
+        match &err {
+            DataError::Http(msg) => assert!(msg.contains(entry.url), "{msg}"),
+            other => panic!("expected DataError::Http, got {other:?}"),
+        }
+        assert!(!path.exists());
+        assert!(!meta_path.exists());
+    }
+
+    /// Only a 404 triggers the archive fallback: any other failure at the
+    /// canonical URL propagates even when an archive URL exists.
+    #[test]
+    fn download_does_not_fall_back_on_other_errors() {
+        let (base, server) = serve(vec![
+            b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_vec(),
+        ]);
+        let entry = KernelEntry {
+            filename: "kernel.bpc",
+            url: leak(format!("{base}/pck/kernel.bpc")),
+            archive_url: Some(leak(format!("{base}/pck/a_old_versions/kernel.bpc"))),
+            gzipped: false,
+            is_static: true,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(entry.filename);
+        let meta_path = dir.path().join("kernel.bpc.meta.json");
+
+        let err = download(&entry, &path, &meta_path).unwrap_err();
+
+        assert_eq!(server.join().unwrap(), ["GET /pck/kernel.bpc HTTP/1.1"]);
+        // The error must come from the canonical 500, not from a second GET
+        // of the archive URL (which would fail to connect once the
+        // one-connection server has exited).
+        let DataError::Http(msg) = &err else {
+            panic!("expected DataError::Http, got {err:?}");
+        };
+        assert!(
+            msg.starts_with(&format!("GET {}: ", entry.url)) && msg.contains("500"),
+            "got {msg}"
+        );
+        assert!(!msg.contains("a_old_versions"), "got {msg}");
+        assert!(!path.exists());
     }
 }
