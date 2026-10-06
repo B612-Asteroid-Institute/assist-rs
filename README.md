@@ -207,7 +207,7 @@ use assist_rs::earth_orientation::EarthOrientation;
 
 let eo = EarthOrientation::from_paths(&[
     "/path/to/earth_latest_high_prec.bpc",
-    "/path/to/earth_620120_250826.bpc",
+    "/path/to/earth_620120_260806.bpc",
 ])?;
 let obs_table = obs_table.with_earth_orientation(eo);
 ```

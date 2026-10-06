@@ -764,25 +764,29 @@ mod tests {
         }
     }
 
-    /// Reference rotation matrices from the *historical* PCK.
+    /// Reference matrices produced by `spiceypy.pxform('J2000', 'ITRF93', et)`
+    /// with only the *historical* PCK `earth_620120_260806.bpc` loaded, the
+    /// vintage `DataManager` pins. Historical kernels revise past values at
+    /// the 1e-13 level, so these matrices describe that file only and must be
+    /// regenerated whenever the pinned vintage changes.
     #[allow(clippy::type_complexity)]
     const HISTORICAL_REFERENCE: &[(f64, [[f64; 3]; 3])] = &[
         (
             -1_000_000_000.0,
             [
                 [
-                    9.94364553444000543e-01,
-                    1.05970302576597813e-01,
-                    3.07080216520302929e-03,
+                    9.94364553444055721e-01,
+                    1.05970302576080297e-01,
+                    3.07080216520309868e-03,
                 ],
                 [
-                    -1.05969692207008692e-01,
-                    9.94369294492217670e-01,
-                    -3.61254206012628920e-04,
+                    -1.05969692206491176e-01,
+                    9.94369294492272737e-01,
+                    -3.61254206010463985e-04,
                 ],
                 [
-                    -3.09179360005633732e-03,
-                    3.38064169663754299e-05,
+                    -3.09179360005615691e-03,
+                    3.38064169658203184e-05,
                     9.99995219823305304e-01,
                 ],
             ],
@@ -791,19 +795,19 @@ mod tests {
             -500_000_000.0,
             [
                 [
-                    7.99970199503151957e-01,
-                    -6.00038405624525262e-01,
-                    1.26161898562854313e-03,
+                    7.99970199499308476e-01,
+                    -6.00038405629649385e-01,
+                    1.26161898563259545e-03,
                 ],
                 [
-                    6.00037686369575995e-01,
-                    7.99971194223579762e-01,
-                    9.29165618249683245e-04,
+                    6.00037686374700119e-01,
+                    7.99971194219736170e-01,
+                    9.29165618254457204e-04,
                 ],
                 [
-                    -1.56679390272404951e-03,
-                    1.37141322137379618e-05,
-                    9.99998772483641107e-01,
+                    -1.56679390273008722e-03,
+                    1.37141322224532125e-05,
+                    9.99998772483640996e-01,
                 ],
             ],
         ),
@@ -811,44 +815,48 @@ mod tests {
             -100_000_000.0,
             [
                 [
-                    2.96054724022567550e-01,
-                    9.55170970204011538e-01,
-                    1.34400329954154074e-04,
+                    2.96054724024251370e-01,
+                    9.55170970203489622e-01,
+                    1.34400329878048286e-04,
                 ],
                 [
-                    -9.55170930067680501e-01,
-                    2.96054751062657939e-01,
-                    -2.80583088907757072e-04,
+                    -9.55170930067158697e-01,
+                    2.96054751064341704e-01,
+                    -2.80583088903246791e-04,
                 ],
                 [
-                    -3.07794677482192702e-04,
-                    -4.53073392118197305e-05,
-                    9.99999951604839565e-01,
+                    -3.07794677455395995e-04,
+                    -4.53073391398217673e-05,
+                    9.99999951604839676e-01,
                 ],
             ],
         ),
     ];
 
-    /// Reference rotation matrices from the *long-term predict* PCK.
+    /// Reference matrices produced by `spiceypy.pxform('J2000', 'ITRF93', et)`
+    /// with only the *long-term predict* PCK
+    /// `earth_2026_260806_2126_predict.bpc` loaded, the vintage `DataManager`
+    /// pins. Each predict vintage forecasts differently (1e-5 level), so these
+    /// matrices must be regenerated whenever the pinned vintage changes.
     #[allow(clippy::type_complexity)]
     const PREDICT_REFERENCE: &[(f64, [[f64; 3]; 3])] = &[
         (
             1_000_000_000.0,
             [
                 [
-                    -9.68628820561433290e-01,
-                    -2.48493871286336765e-01,
-                    3.00065174523937717e-03,
+                    -9.68630871318577058e-01,
+                    -2.48485878399826887e-01,
+                    3.00056069437759643e-03,
                 ],
                 [
-                    2.48492558544244874e-01,
-                    -9.68633467582096008e-01,
-                    -8.08596326593691295e-04,
+                    2.48484565923518197e-01,
+                    -9.68635518049110633e-01,
+                    -8.08499555874975240e-04,
                 ],
                 [
-                    3.10746293650065878e-03,
-                    -3.75900766640402395e-05,
-                    9.99995171118883142e-01,
+                    3.10735038496371416e-03,
+                    -3.75446075981944460e-05,
+                    9.99995171470336452e-01,
                 ],
             ],
         ),
@@ -856,19 +864,19 @@ mod tests {
             2_000_000_000.0,
             [
                 [
-                    -3.19030968337769172e-01,
-                    9.47742239093496308e-01,
-                    1.97217633886831445e-03,
+                    -3.19023148503682963e-01,
+                    9.47744871664235600e-01,
+                    1.97204283384821988e-03,
                 ],
                 [
-                    -9.47724230103578091e-01,
-                    -3.19037064009499882e-01,
-                    5.84255618531083487e-03,
+                    -9.47726862199533726e-01,
+                    -3.19029243501186666e-01,
+                    5.84264122522114293e-03,
                 ],
                 [
-                    6.16643462995759405e-03,
-                    -5.12294501492371879e-06,
-                    9.99980987348114470e-01,
+                    6.16647259161192968e-03,
+                    -5.02016779863057039e-06,
+                    9.99980987114542530e-01,
                 ],
             ],
         ),
@@ -876,19 +884,19 @@ mod tests {
             3_500_000_000.0,
             [
                 [
-                    9.39214248749958514e-01,
-                    -3.43181457839852599e-01,
-                    -1.01529276548461694e-02,
+                    9.39211416099049790e-01,
+                    -3.43189208420455805e-01,
+                    -1.01529844360501026e-02,
                 ],
                 [
-                    3.43163334530398545e-01,
-                    9.39269108836152888e-01,
-                    -3.53086676571068292e-03,
+                    3.43171085594779879e-01,
+                    9.39266276944787704e-01,
+                    -3.53086476342517885e-03,
                 ],
                 [
-                    1.07480593145401586e-02,
-                    -1.67872132489699233e-04,
-                    9.99942223850917467e-01,
+                    1.07481105743267285e-02,
+                    -1.67982196435378928e-04,
+                    9.99942223281457210e-01,
                 ],
             ],
         ),
@@ -896,8 +904,9 @@ mod tests {
 
     #[test]
     fn historical_kernel_matches_spice() {
-        let path = cache_path("earth_620120_250826.bpc");
+        let path = cache_path("earth_620120_260806.bpc");
         if !path.exists() {
+            eprintln!("skipping: {} not present", path.display());
             return;
         }
         let eo = EarthOrientation::from_paths(&[&path]).unwrap();
@@ -910,8 +919,9 @@ mod tests {
 
     #[test]
     fn predict_kernel_matches_spice() {
-        let path = cache_path("earth_2025_250826_2125_predict.bpc");
+        let path = cache_path("earth_2026_260806_2126_predict.bpc");
         if !path.exists() {
+            eprintln!("skipping: {} not present", path.display());
             return;
         }
         let eo = EarthOrientation::from_paths(&[&path]).unwrap();
@@ -925,10 +935,13 @@ mod tests {
     #[test]
     fn three_kernel_coverage_spans_historical_current_predict() {
         let current = cache_path("earth_latest_high_prec.bpc");
-        let historical = cache_path("earth_620120_250826.bpc");
-        let predict = cache_path("earth_2025_250826_2125_predict.bpc");
-        if !current.exists() || !historical.exists() || !predict.exists() {
-            return;
+        let historical = cache_path("earth_620120_260806.bpc");
+        let predict = cache_path("earth_2026_260806_2126_predict.bpc");
+        for path in [&current, &historical, &predict] {
+            if !path.exists() {
+                eprintln!("skipping: {} not present", path.display());
+                return;
+            }
         }
         // Load in SPICE-idiomatic order: the most authoritative (current
         // high-precision) goes last so last-in-wins makes it the default for
@@ -973,14 +986,19 @@ mod tests {
     #[test]
     fn last_in_wins_at_overlapping_epochs() {
         let current = cache_path("earth_latest_high_prec.bpc");
-        let historical = cache_path("earth_620120_250826.bpc");
-        if !current.exists() || !historical.exists() {
-            return;
+        let historical = cache_path("earth_620120_260806.bpc");
+        for path in [&current, &historical] {
+            if !path.exists() {
+                eprintln!("skipping: {} not present", path.display());
+                return;
+            }
         }
         // `current` and `historical` both cover recent decades. Query an ET
-        // inside both kernels' coverage; the chosen rotation should depend
-        // on load order.
-        let et = 500_000_000.0; // mid-2015
+        // inside both kernels' coverage where they disagree by more than the
+        // 1e-12 threshold below (1.0e-11 for the 260806 historical kernel
+        // against the 2026-04-14 high-precision kernel; earlier epochs agree
+        // to a few 1e-13); the chosen rotation should depend on load order.
+        let et = 800_000_000.0; // 2025-05-09
 
         let eo_current_last = EarthOrientation::from_paths(&[&historical, &current]).unwrap();
         let m_current_last = eo_current_last.rotation_itrf_to_j2000_et(et).unwrap();
